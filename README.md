@@ -85,9 +85,22 @@ Each adapter should define:
 
 Examples of future adapters:
 
-- `adjust/report-yesterday`
 - `shushu/project-row`
 - `feishu/doc-export`
+
+## First business adapter
+
+### Adjust: report yesterday
+
+```bash
+browser2cli run adjust-report-yesterday \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "suite.adjust.com/datascape/report" \
+  --date 2026-03-22 \
+  --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()"
+```
+
+This adapter is intended for an already-open Adjust report page. It captures the `pivot_report` response from the page context and filters rows for the target date.
 
 ## Current command model
 

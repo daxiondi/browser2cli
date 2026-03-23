@@ -94,9 +94,22 @@ browser2cli capture-fetch \
 
 后续适合做成固定 adapter 的能力包括：
 
-- `adjust/report-yesterday`
 - `shushu/project-row`
 - `feishu/doc-export`
+
+## 第一条业务 adapter
+
+### Adjust：取昨天报表
+
+```bash
+browser2cli run adjust-report-yesterday \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "suite.adjust.com/datascape/report" \
+  --date 2026-03-22 \
+  --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()"
+```
+
+这个 adapter 假设你已经打开了 Adjust 报表页。它会在页面上下文里捕获 `pivot_report` 的响应，然后筛出目标日期的行。
 
 ## 安全边界
 

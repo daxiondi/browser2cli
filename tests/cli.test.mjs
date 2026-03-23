@@ -8,6 +8,9 @@ const root = new URL("../dist/", import.meta.url);
 const { listTargets, resolveTarget, evaluateInTarget, captureFetchInTarget } = await import(
   new URL("./cdp.js", root)
 );
+const { runAdjustReportYesterday } = await import(
+  new URL("./adapters/adjust-report-yesterday.js", root)
+);
 
 async function createMockCdpServer() {
   const httpServer = createServer((req, res) => {
@@ -29,8 +32,11 @@ async function createMockCdpServer() {
 
   const wsServer = new WebSocketServer({ noServer: true });
   const calls = [];
+  const sockets = new Set();
 
   wsServer.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
     socket.on("message", (raw) => {
       const msg = JSON.parse(String(raw));
       calls.push(msg);
@@ -76,7 +82,10 @@ async function createMockCdpServer() {
     endpoint: `http://127.0.0.1:${address.port}`,
     calls,
     async close() {
-      wsServer.close();
+      for (const socket of sockets) {
+        socket.close();
+      }
+      await new Promise((resolve) => wsServer.close(resolve));
       httpServer.close();
       await once(httpServer, "close");
     }
@@ -135,6 +144,25 @@ test("captureFetchInTarget installs hooks, runs trigger script, and returns capt
     assert.equal(captured[0].kind, "fetch");
     assert.equal(captured[0].response.rows[0].installs, 321);
     assert.ok(mock.calls.some((call) => String(call.params?.expression).includes("__browser2cliCaptureInstalled")));
+  } finally {
+    await mock.close();
+  }
+});
+
+test("adjust-report-yesterday adapter returns filtered rows from pivot_report", async () => {
+  const mock = await createMockCdpServer();
+  try {
+    const targets = await listTargets(mock.endpoint);
+    const parsed = await runAdjustReportYesterday(targets[0], {
+      endpoint: mock.endpoint,
+      date: "2026-03-22",
+      triggerExpr: "(() => window.fetch('/reports-service/pivot_report'))()"
+    });
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.adapter, "adjust-report-yesterday");
+    assert.equal(parsed.date, "2026-03-22");
+    assert.equal(parsed.rows.length, 1);
+    assert.equal(parsed.rows[0].installs, 321);
   } finally {
     await mock.close();
   }

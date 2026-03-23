@@ -2,6 +2,7 @@
 
 import { captureFetchInTarget, evaluateInTarget, listTargets, resolveTarget, type TargetInfo } from "./cdp.js";
 import { parseCliArgs, type Args } from "./args.js";
+import { runAdjustReportYesterday } from "./adapters/adjust-report-yesterday.js";
 
 type AdapterResult = Record<string, unknown>;
 
@@ -47,7 +48,19 @@ const inspectPageAdapter: Adapter = {
   }
 };
 
-const adapters = new Map<string, Adapter>([[inspectPageAdapter.name, inspectPageAdapter]]);
+const adjustReportYesterdayAdapter: Adapter = {
+  name: "adjust-report-yesterday",
+  description: "Capture pivot_report from an Adjust report page and return rows for yesterday or a specified date.",
+  async run(args) {
+    const target = await pickTarget(args);
+    return runAdjustReportYesterday(target, args);
+  }
+};
+
+const adapters = new Map<string, Adapter>([
+  [inspectPageAdapter.name, inspectPageAdapter],
+  [adjustReportYesterdayAdapter.name, adjustReportYesterdayAdapter]
+]);
 
 function printHelp(): void {
   console.log(`browser2cli
@@ -65,6 +78,7 @@ Examples:
   browser2cli eval --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => document.title)()"
   browser2cli capture-fetch --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => window.fetch('/api'))()"
   browser2cli run inspect-page --endpoint http://127.0.0.1:9222 --url-contains adjust.com
+  browser2cli run adjust-report-yesterday --endpoint http://127.0.0.1:9222 --url-contains adjust.com --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()"
 `);
 }
 
