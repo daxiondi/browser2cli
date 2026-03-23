@@ -32,6 +32,8 @@ The practical workaround is to:
 This initial version provides:
 
 - a lightweight TypeScript CLI
+- a CDP attachment core for existing browser tabs
+- `tabs`, `eval`, and `capture-fetch` commands
 - a runtime shape for page-context adapters
 - a sample built-in adapter for generic page metadata
 - a design document for site-specific adapters
@@ -42,7 +44,10 @@ This initial version provides:
 npm install
 npm run build
 node dist/index.js list
-node dist/index.js run inspect-page --url "https://example.com"
+node dist/index.js tabs --endpoint "http://127.0.0.1:9222"
+node dist/index.js eval --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => document.title)()"
+node dist/index.js capture-fetch --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => window.fetch('/api'))()"
+node dist/index.js run inspect-page --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com"
 ```
 
 ## Planned adapter model
@@ -60,6 +65,35 @@ Examples of future adapters:
 - `shushu/project-row`
 - `feishu/doc-export`
 
+## Current command model
+
+### List tabs
+
+```bash
+browser2cli tabs --endpoint http://127.0.0.1:9222
+```
+
+### Evaluate inside a page
+
+```bash
+browser2cli eval \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --expr "(() => ({ title: document.title, url: location.href }))()"
+```
+
+### Capture authenticated fetch/XHR responses
+
+```bash
+browser2cli capture-fetch \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --expr "(() => window.fetch('/reports-service/pivot_report'))()" \
+  --wait-ms 1500
+```
+
+This command works by installing a lightweight fetch/XHR hook inside the page context, triggering a script, waiting briefly, and returning the captured request/response payloads as JSON.
+
 ## Security stance
 
 - Never dump cookies or auth headers into output
@@ -69,5 +103,4 @@ Examples of future adapters:
 
 ## Repository status
 
-This is a starter repository. It establishes the CLI contract and the page-context execution model first, then adapters can be added incrementally.
-
+This is a starter repository with a working CDP core. It establishes the CLI contract and the page-context execution model first, then adapters can be added incrementally.

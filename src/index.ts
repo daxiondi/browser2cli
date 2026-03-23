@@ -1,22 +1,48 @@
 #!/usr/bin/env node
 
+import { captureFetchInTarget, evaluateInTarget, listTargets, resolveTarget, type TargetInfo } from "./cdp.js";
+import { parseCliArgs, type Args } from "./args.js";
+
 type AdapterResult = Record<string, unknown>;
 
 type Adapter = {
   name: string;
   description: string;
-  run: (args: Record<string, string>) => Promise<AdapterResult>;
+  run: (args: Args) => Promise<AdapterResult>;
 };
+
+function requireArg(args: Args, name: string): string {
+  const value = args[name];
+  if (!value) {
+    throw new Error(`Missing required argument --${name}`);
+  }
+  return value;
+}
+
+async function pickTarget(args: Args): Promise<TargetInfo> {
+  const endpoint = requireArg(args, "endpoint");
+  const targets = await listTargets(endpoint);
+  return resolveTarget(targets, {
+    targetId: args["target-id"],
+    urlContains: args["url-contains"],
+    titleContains: args["title-contains"]
+  });
+}
 
 const inspectPageAdapter: Adapter = {
   name: "inspect-page",
-  description: "Return a minimal stub result for a target page URL.",
+  description: "Attach to a page target and return basic page metadata.",
   async run(args) {
+    const target = await pickTarget(args);
+    const page = await evaluateInTarget(
+      target,
+      "(() => ({ title: document.title, url: location.href, readyState: document.readyState }))()"
+    );
     return {
       ok: true,
       adapter: "inspect-page",
-      url: args.url ?? null,
-      note: "CDP attachment and in-page extraction are the next implementation step."
+      target,
+      page
     };
   }
 };
@@ -28,32 +54,22 @@ function printHelp(): void {
 
 Usage:
   browser2cli list
+  browser2cli tabs --endpoint <url>
+  browser2cli eval --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript>
+  browser2cli capture-fetch --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--expr <javascript>] [--wait-ms <number>]
   browser2cli run <adapter> [--key value]
 
 Examples:
   browser2cli list
-  browser2cli run inspect-page --url https://example.com
+  browser2cli tabs --endpoint http://127.0.0.1:9222
+  browser2cli eval --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => document.title)()"
+  browser2cli capture-fetch --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => window.fetch('/api'))()"
+  browser2cli run inspect-page --endpoint http://127.0.0.1:9222 --url-contains adjust.com
 `);
 }
 
-function parseArgs(argv: string[]): { command?: string; adapter?: string; args: Record<string, string> } {
-  const [command, adapter, ...rest] = argv;
-  const args: Record<string, string> = {};
-
-  for (let i = 0; i < rest.length; i += 2) {
-    const key = rest[i];
-    const value = rest[i + 1];
-    if (!key?.startsWith("--") || value === undefined) {
-      continue;
-    }
-    args[key.slice(2)] = value;
-  }
-
-  return { command, adapter, args };
-}
-
 async function main(): Promise<void> {
-  const { command, adapter, args } = parseArgs(process.argv.slice(2));
+  const { command, adapter, args } = parseCliArgs(process.argv.slice(2));
 
   if (!command || command === "help" || command === "--help") {
     printHelp();
@@ -69,6 +85,37 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "tabs") {
+    const endpoint = requireArg(args, "endpoint");
+    console.log(JSON.stringify(await listTargets(endpoint), null, 2));
+    return;
+  }
+
+  if (command === "eval") {
+    const target = await pickTarget(args);
+    const expr = requireArg(args, "expr");
+    console.log(JSON.stringify({
+      ok: true,
+      target,
+      result: await evaluateInTarget(target, expr)
+    }, null, 2));
+    return;
+  }
+
+  if (command === "capture-fetch") {
+    const target = await pickTarget(args);
+    const captured = await captureFetchInTarget(target, {
+      triggerExpression: args.expr,
+      waitMs: args["wait-ms"] ? Number(args["wait-ms"]) : undefined
+    });
+    console.log(JSON.stringify({
+      ok: true,
+      target,
+      requests: captured
+    }, null, 2));
+    return;
+  }
+
   if (command === "run") {
     if (!adapter) {
       throw new Error("Missing adapter name. Use `browser2cli list` to see available adapters.");
@@ -77,8 +124,7 @@ async function main(): Promise<void> {
     if (!item) {
       throw new Error(`Unknown adapter: ${adapter}`);
     }
-    const result = await item.run(args);
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(await item.run(args), null, 2));
     return;
   }
 
