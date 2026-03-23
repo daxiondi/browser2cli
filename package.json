@@ -2,15 +2,31 @@
   "name": "browser2cli",
   "version": "0.1.0",
   "description": "Turn authenticated browser pages into reusable CLI data adapters.",
+  "author": "daxiondi",
+  "homepage": "https://github.com/daxiondi/browser2cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daxiondi/browser2cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/daxiondi/browser2cli/issues"
+  },
   "type": "module",
   "bin": {
     "browser2cli": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test tests/**/*.test.mjs"
+    "test": "npm run build && node --test tests/**/*.test.mjs",
+    "prepublishOnly": "npm run test && npm run check"
   },
   "keywords": [
     "cdp",
@@ -20,6 +36,12 @@
     "data-extraction"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "typescript": "^5.9.2",

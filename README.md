@@ -1,5 +1,7 @@
 # browser2cli
 
+[中文](./README.zh-CN.md) · English
+
 `browser2cli` is a minimal CLI for turning an already-authenticated browser tab into a structured data extraction tool.
 
 The core idea is simple:
@@ -37,6 +39,28 @@ This initial version provides:
 - a runtime shape for page-context adapters
 - a sample built-in adapter for generic page metadata
 - a design document for site-specific adapters
+
+## Install
+
+### From npm
+
+```bash
+npm install -g browser2cli
+browser2cli tabs --endpoint http://127.0.0.1:9222
+```
+
+### With npx
+
+```bash
+npx browser2cli tabs --endpoint http://127.0.0.1:9222
+```
+
+### From GitHub before npm publish
+
+```bash
+npm install -g github:daxiondi/browser2cli
+browser2cli tabs --endpoint http://127.0.0.1:9222
+```
 
 ## Commands
 
@@ -104,3 +128,11 @@ This command works by installing a lightweight fetch/XHR hook inside the page co
 ## Repository status
 
 This is a starter repository with a working CDP core. It establishes the CLI contract and the page-context execution model first, then adapters can be added incrementally.
+
+## Publish checklist
+
+```bash
+npm run test
+npm run check
+npm publish
+```
