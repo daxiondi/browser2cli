@@ -1,0 +1,27 @@
+{
+  "name": "browser2cli",
+  "version": "0.1.0",
+  "description": "Turn authenticated browser pages into reusable CLI data adapters.",
+  "type": "module",
+  "bin": {
+    "browser2cli": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "cdp",
+    "browser",
+    "cli",
+    "automation",
+    "data-extraction"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "^5.9.2"
+  }
+}
+
