@@ -37,6 +37,17 @@ type CdpResponse = {
   };
 };
 
+type NetworkBodyResult = {
+  body?: string;
+  base64Encoded?: boolean;
+};
+
+type PendingRequest = {
+  resolve: (value: CdpResponse) => void;
+  reject: (error: Error) => void;
+  method: string;
+};
+
 async function cdpJson<T>(endpoint: string, path: string): Promise<T> {
   const res = await fetch(new URL(path, endpoint));
   if (!res.ok) {
@@ -83,9 +94,32 @@ export function resolveTarget(targets: TargetInfo[], selector: TargetSelector): 
 class CdpSession {
   private readonly socket: WebSocket;
   private nextId = 1;
+  private readonly pending = new Map<number, PendingRequest>();
+  private readonly eventHandlers = new Map<string, Set<(params: unknown) => void>>();
 
   constructor(socket: WebSocket) {
     this.socket = socket;
+    this.socket.addEventListener("message", (event) => {
+      const parsed = JSON.parse(String((event as MessageEvent<string>).data)) as CdpResponse;
+      if (typeof parsed.id === "number") {
+        const pending = this.pending.get(parsed.id);
+        if (!pending) {
+          return;
+        }
+        this.pending.delete(parsed.id);
+        pending.resolve(parsed);
+        return;
+      }
+      if (parsed.method) {
+        const handlers = this.eventHandlers.get(parsed.method);
+        if (!handlers) {
+          return;
+        }
+        for (const handler of handlers) {
+          handler(parsed.params);
+        }
+      }
+    });
   }
 
   static async connect(target: TargetInfo): Promise<CdpSession> {
@@ -109,20 +143,12 @@ class CdpSession {
     };
 
     const result = await new Promise<CdpResponse>((resolve, reject) => {
-      const onMessage = (event: MessageEvent<string>) => {
-        const parsed = JSON.parse(event.data) as CdpResponse;
-        if (parsed.id === id) {
-          this.socket.removeEventListener("message", onMessage as EventListener);
-          resolve(parsed);
-        }
-      };
-
       const onError = () => {
-        this.socket.removeEventListener("message", onMessage as EventListener);
+        this.pending.delete(id);
         reject(new Error("CDP websocket error while waiting for response."));
       };
 
-      this.socket.addEventListener("message", onMessage as EventListener);
+      this.pending.set(id, { resolve, reject, method });
       this.socket.addEventListener("error", onError as EventListener, { once: true });
       this.socket.send(JSON.stringify(payload));
     });
@@ -148,6 +174,18 @@ class CdpSession {
     return result?.result?.value;
   }
 
+  on(method: string, handler: (params: unknown) => void): () => void {
+    const handlers = this.eventHandlers.get(method) ?? new Set();
+    handlers.add(handler);
+    this.eventHandlers.set(method, handlers);
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        this.eventHandlers.delete(method);
+      }
+    };
+  }
+
   async close(): Promise<void> {
     if (this.socket.readyState === this.socket.CLOSED) {
       return;
@@ -156,6 +194,18 @@ class CdpSession {
       this.socket.addEventListener("close", () => resolve(), { once: true });
       this.socket.close();
     });
+  }
+}
+
+function parseResponseBody(body: NetworkBodyResult): unknown {
+  const raw = body.base64Encoded && body.body ? Buffer.from(body.body, "base64").toString("utf8") : (body.body ?? "");
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
   }
 }
 
@@ -250,17 +300,83 @@ export async function captureFetchInTarget(
 ): Promise<CapturedRequest[]> {
   const session = await CdpSession.connect(target);
   try {
-    await session.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: installCaptureScript
+    const requests = new Map<string, CapturedRequest>();
+    const finishedIds: string[] = [];
+    const stopRequest = session.on("Network.requestWillBeSent", (params) => {
+      const p = params as {
+        requestId?: string;
+        request?: { url?: string; method?: string; postData?: string };
+      };
+      if (!p.requestId || !p.request?.url) {
+        return;
+      }
+      requests.set(p.requestId, {
+        kind: "fetch",
+        url: p.request.url,
+        method: p.request.method ?? "GET",
+        requestBody: p.request.postData ?? null
+      });
     });
-    await session.evaluate(installCaptureScript);
+    const stopResponse = session.on("Network.responseReceived", (params) => {
+      const p = params as {
+        requestId?: string;
+        response?: { url?: string; status?: number };
+      };
+      if (!p.requestId || !p.response) {
+        return;
+      }
+      const existing = requests.get(p.requestId) ?? {
+        kind: "fetch" as const,
+        url: p.response.url ?? "",
+        method: "GET"
+      };
+      existing.url = p.response.url ?? existing.url;
+      existing.status = p.response.status;
+      requests.set(p.requestId, existing);
+    });
+    const stopFinished = session.on("Network.loadingFinished", (params) => {
+      const p = params as { requestId?: string };
+      if (p.requestId) {
+        finishedIds.push(p.requestId);
+      }
+    });
+    const stopFailed = session.on("Network.loadingFailed", (params) => {
+      const p = params as { requestId?: string; errorText?: string };
+      if (!p.requestId) {
+        return;
+      }
+      const existing = requests.get(p.requestId);
+      if (existing) {
+        existing.error = p.errorText ?? "Network loading failed";
+      }
+    });
+
+    await session.send("Network.enable");
     if (options.triggerExpression) {
       await session.evaluate(wrapExpression(options.triggerExpression));
     }
     const waitMs = options.waitMs ?? 1500;
     await new Promise((resolve) => setTimeout(resolve, waitMs));
-    const result = await session.evaluate("(() => window.__browser2cliCapturedRequests || [])()");
-    return Array.isArray(result) ? (result as CapturedRequest[]) : [];
+
+    for (const requestId of finishedIds) {
+      const existing = requests.get(requestId);
+      if (!existing || existing.status === undefined) {
+        continue;
+      }
+      try {
+        const body = await session.send<NetworkBodyResult>("Network.getResponseBody", { requestId });
+        existing.response = parseResponseBody(body);
+      } catch (error) {
+        existing.error = error instanceof Error ? error.message : String(error);
+      }
+    }
+
+    stopRequest();
+    stopResponse();
+    stopFinished();
+    stopFailed();
+
+    return [...requests.values()];
   } finally {
     await session.close();
   }

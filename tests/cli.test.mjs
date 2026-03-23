@@ -43,20 +43,39 @@ async function createMockCdpServer() {
       const expression = msg.params?.expression ?? "";
       let value = null;
 
+      if (msg.method === "Network.enable") {
+        socket.send(JSON.stringify({
+          id: msg.id,
+          result: {}
+        }));
+        return;
+      }
+
+      if (msg.method === "Network.getResponseBody") {
+        socket.send(JSON.stringify({
+          id: msg.id,
+          result: {
+            body: JSON.stringify({ rows: [{ day: "2026-03-22", installs: 321 }] }),
+            base64Encoded: false
+          }
+        }));
+        return;
+      }
+
+      if (msg.method === "Page.addScriptToEvaluateOnNewDocument") {
+        socket.send(JSON.stringify({
+          id: msg.id,
+          result: { identifier: "script-1" }
+        }));
+        return;
+      }
+
       if (expression.includes("document.title")) {
         value = { title: "Adjust Report", url: "https://suite.adjust.com/datascape/report" };
       } else if (expression.includes("__browser2cliCaptureInstalled")) {
         value = true;
       } else if (expression.includes("__browser2cliCapturedRequests")) {
-        value = [
-          {
-            kind: "fetch",
-            url: "https://suite.adjust.com/reports-service/pivot_report",
-            method: "POST",
-            status: 200,
-            response: { rows: [{ day: "2026-03-22", installs: 321 }] }
-          }
-        ];
+        value = [];
       } else if (expression.includes("window.fetch")) {
         value = "triggered";
       }
@@ -65,6 +84,38 @@ async function createMockCdpServer() {
         id: msg.id,
         result: { result: { type: "object", value } }
       }));
+
+      if (expression.includes("window.fetch") || expression.includes("location.reload")) {
+        setTimeout(() => {
+          socket.send(JSON.stringify({
+            method: "Network.requestWillBeSent",
+            params: {
+              requestId: "req-1",
+              request: {
+                url: "https://suite.adjust.com/reports-service/pivot_report",
+                method: "POST",
+                postData: "{\"range\":\"yesterday\"}"
+              }
+            }
+          }));
+          socket.send(JSON.stringify({
+            method: "Network.responseReceived",
+            params: {
+              requestId: "req-1",
+              response: {
+                url: "https://suite.adjust.com/reports-service/pivot_report",
+                status: 200
+              }
+            }
+          }));
+          socket.send(JSON.stringify({
+            method: "Network.loadingFinished",
+            params: {
+              requestId: "req-1"
+            }
+          }));
+        }, 5);
+      }
     });
   });
 
@@ -143,7 +194,7 @@ test("captureFetchInTarget installs hooks, runs trigger script, and returns capt
     assert.equal(captured.length, 1);
     assert.equal(captured[0].kind, "fetch");
     assert.equal(captured[0].response.rows[0].installs, 321);
-    assert.ok(mock.calls.some((call) => String(call.params?.expression).includes("__browser2cliCaptureInstalled")));
+    assert.ok(mock.calls.some((call) => call.method === "Network.enable"));
   } finally {
     await mock.close();
   }
@@ -159,8 +210,8 @@ test("captureFetchInTarget persists capture hooks across reloads", async () => {
     });
     assert.equal(captured.length, 1);
     assert.ok(
-      mock.calls.some((call) => call.method === "Page.addScriptToEvaluateOnNewDocument"),
-      "expected capture hook to be registered for future documents"
+      mock.calls.some((call) => call.method === "Network.enable"),
+      "expected network capture to be enabled before reload"
     );
   } finally {
     await mock.close();
