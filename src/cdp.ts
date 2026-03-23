@@ -24,6 +24,8 @@ export type CapturedRequest = {
 
 type CdpResponse = {
   id: number;
+  method?: string;
+  params?: unknown;
   result?: {
     result?: {
       value?: unknown;
@@ -98,16 +100,12 @@ class CdpSession {
     return new CdpSession(socket);
   }
 
-  async evaluate(expression: string): Promise<unknown> {
+  async send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     const id = this.nextId++;
     const payload = {
       id,
-      method: "Runtime.evaluate",
-      params: {
-        expression,
-        returnByValue: true,
-        awaitPromise: true
-      }
+      method,
+      params
     };
 
     const result = await new Promise<CdpResponse>((resolve, reject) => {
@@ -130,10 +128,24 @@ class CdpSession {
     });
 
     if (result.error?.message) {
-      throw new Error(`CDP Runtime.evaluate failed: ${result.error.message}`);
+      throw new Error(`CDP ${method} failed: ${result.error.message}`);
     }
 
-    return result.result?.result?.value;
+    return result.result as T;
+  }
+
+  async evaluate(expression: string): Promise<unknown> {
+    const result = await this.send<{
+      result?: {
+        value?: unknown;
+      };
+    }>("Runtime.evaluate", {
+      expression,
+      returnByValue: true,
+      awaitPromise: true
+    });
+
+    return result?.result?.value;
   }
 
   async close(): Promise<void> {
@@ -238,6 +250,9 @@ export async function captureFetchInTarget(
 ): Promise<CapturedRequest[]> {
   const session = await CdpSession.connect(target);
   try {
+    await session.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: installCaptureScript
+    });
     await session.evaluate(installCaptureScript);
     if (options.triggerExpression) {
       await session.evaluate(wrapExpression(options.triggerExpression));

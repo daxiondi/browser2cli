@@ -149,6 +149,24 @@ test("captureFetchInTarget installs hooks, runs trigger script, and returns capt
   }
 });
 
+test("captureFetchInTarget persists capture hooks across reloads", async () => {
+  const mock = await createMockCdpServer();
+  try {
+    const targets = await listTargets(mock.endpoint);
+    const captured = await captureFetchInTarget(targets[0], {
+      triggerExpression: "(() => { location.reload(); return 'reloaded'; })()",
+      waitMs: 10
+    });
+    assert.equal(captured.length, 1);
+    assert.ok(
+      mock.calls.some((call) => call.method === "Page.addScriptToEvaluateOnNewDocument"),
+      "expected capture hook to be registered for future documents"
+    );
+  } finally {
+    await mock.close();
+  }
+});
+
 test("adjust-report-yesterday adapter returns filtered rows from pivot_report", async () => {
   const mock = await createMockCdpServer();
   try {
