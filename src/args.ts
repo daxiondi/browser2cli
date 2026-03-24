@@ -6,7 +6,7 @@ export function parseCliArgs(argv: string[]): { command?: string; adapter?: stri
   const args: Args = {};
   let adapter: string | undefined;
 
-  if (command === "run") {
+  if (command === "run" || command === "info") {
     adapter = rest.shift();
   }
 

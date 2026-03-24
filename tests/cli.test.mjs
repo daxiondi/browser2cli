@@ -228,10 +228,12 @@ test("adjust-report-yesterday adapter returns filtered rows from pivot_report", 
       triggerExpr: "(() => window.fetch('/reports-service/pivot_report'))()"
     });
     assert.equal(parsed.ok, true);
-    assert.equal(parsed.adapter, "adjust-report-yesterday");
-    assert.equal(parsed.date, "2026-03-22");
-    assert.equal(parsed.rows.length, 1);
-    assert.equal(parsed.rows[0].installs, 321);
+    assert.equal(parsed.code, "OK");
+    assert.equal(parsed.state, "ok");
+    assert.equal(parsed.meta.adapter, "adjust-report-yesterday");
+    assert.equal(parsed.data.date, "2026-03-22");
+    assert.equal(parsed.data.rows.length, 1);
+    assert.equal(parsed.data.rows[0].installs, 321);
   } finally {
     await mock.close();
   }

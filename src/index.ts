@@ -1,85 +1,174 @@
 #!/usr/bin/env node
 
-import { captureFetchInTarget, evaluateInTarget, listTargets, resolveTarget, type TargetInfo } from "./cdp.js";
+import { evaluateInTarget, listTargets, resolveTarget, type TargetInfo, type TargetSelector } from "./cdp.js";
 import { parseCliArgs, type Args } from "./args.js";
 import { runAdjustReportYesterday } from "./adapters/adjust-report-yesterday.js";
+import { Browser2CliError, normalizeThrownError, okResult, type ResultEnvelope } from "./protocol.js";
+import { renderEnvelope } from "./render.js";
+import { getAdapter, listAdapters, registerAdapter, type Adapter } from "./registry.js";
+import { captureUntil, detectState, waitForPageReady, waitForTarget } from "./runtime.js";
 
-type AdapterResult = Record<string, unknown>;
+function isJsonMode(args: Args): boolean {
+  return args.json === "true";
+}
 
-type Adapter = {
-  name: string;
-  description: string;
-  run: (args: Args) => Promise<AdapterResult>;
-};
+function printOutput(envelope: ResultEnvelope<unknown>, args: Args): void {
+  if (isJsonMode(args)) {
+    console.log(JSON.stringify(envelope, null, 2));
+    return;
+  }
+  console.log(renderEnvelope(envelope));
+}
 
 function requireArg(args: Args, name: string): string {
   const value = args[name];
   if (!value) {
-    throw new Error(`Missing required argument --${name}`);
+    throw new Browser2CliError({
+      code: "INVALID_ARGUMENT",
+      state: "invalid_argument",
+      message: `Missing required argument --${name}`,
+      phase: "collect",
+      details: { argument: name },
+      nextSteps: [`请补充参数 --${name} 后重试。`]
+    });
   }
   return value;
+}
+
+function selectorFromArgs(args: Args): TargetSelector {
+  return {
+    targetId: args["target-id"],
+    urlContains: args["url-contains"],
+    titleContains: args["title-contains"]
+  };
 }
 
 async function pickTarget(args: Args): Promise<TargetInfo> {
   const endpoint = requireArg(args, "endpoint");
   const targets = await listTargets(endpoint);
-  return resolveTarget(targets, {
-    targetId: args["target-id"],
-    urlContains: args["url-contains"],
-    titleContains: args["title-contains"]
-  });
+  try {
+    return resolveTarget(targets, selectorFromArgs(args));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Could not resolve a unique target")) {
+      throw new Browser2CliError({
+        code: "MULTIPLE_TARGETS",
+        state: "multiple_targets",
+        message,
+        retryable: true,
+        phase: "locate",
+        details: { selector: selectorFromArgs(args) },
+        nextSteps: ["请补充更精确的 --target-id、--url-contains 或 --title-contains。"]
+      });
+    }
+    throw error;
+  }
 }
 
 const inspectPageAdapter: Adapter = {
   name: "inspect-page",
-  description: "Attach to a page target and return basic page metadata.",
+  site: "generic",
+  description: "附着到页面目标并返回基础页面信息。",
+  input: ["--endpoint", "--target-id | --url-contains | --title-contains"],
+  output: ["title", "url", "readyState"],
+  states: ["ok", "target_not_found", "multiple_targets", "eval_error", "internal_error"],
+  prerequisites: ["目标页面已打开，且可通过 CDP 访问。"],
+  loginRequired: false,
+  reusableSession: true,
   async run(args) {
-    const target = await pickTarget(args);
-    const page = await evaluateInTarget(
-      target,
-      "(() => ({ title: document.title, url: location.href, readyState: document.readyState }))()"
-    );
-    return {
-      ok: true,
-      adapter: "inspect-page",
-      target,
-      page
-    };
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const page = await evaluateInTarget(
+        target,
+        "(() => ({ title: document.title, url: location.href, readyState: document.readyState }))()"
+      );
+      return okResult({
+        command: "run",
+        adapter: "inspect-page",
+        durationMs: Date.now() - startedAt,
+        phase: "collect",
+        target,
+        data: page
+      });
+    } catch (error) {
+      return normalizeThrownError(error, {
+        command: "run",
+        adapter: "inspect-page",
+        durationMs: Date.now() - startedAt,
+        phase: "collect",
+        nextSteps: ["请确认目标页面已经打开，并且 endpoint 可连通。"]
+      });
+    }
   }
 };
 
 const adjustReportYesterdayAdapter: Adapter = {
   name: "adjust-report-yesterday",
-  description: "Capture pivot_report from an Adjust report page and return rows for yesterday or a specified date.",
+  site: "adjust",
+  description: "从 Adjust 报表页抓取 pivot_report，并返回昨天或指定日期的数据行。",
+  input: ["--endpoint", "--target-id | --url-contains | --title-contains", "--date?", "--trigger-expr?"],
+  output: ["date", "rowCount", "rows", "request"],
+  states: [
+    "ok",
+    "target_not_found",
+    "multiple_targets",
+    "capture_timeout",
+    "page_not_ready",
+    "network_error",
+    "internal_error"
+  ],
+  prerequisites: ["Adjust 报表页已打开，且页面触发后会产生 pivot_report 请求。"],
+  loginRequired: true,
+  reusableSession: true,
   async run(args) {
-    const target = await pickTarget(args);
-    return runAdjustReportYesterday(target, args);
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      return await runAdjustReportYesterday(target, args);
+    } catch (error) {
+      return normalizeThrownError(error, {
+        command: "run",
+        adapter: "adjust-report-yesterday",
+        durationMs: Date.now() - startedAt,
+        phase: "collect",
+        nextSteps: ["请确认当前页面是 Adjust 报表页，并且触发动作会发出 pivot_report 请求。"]
+      });
+    }
   }
 };
 
-const adapters = new Map<string, Adapter>([
-  [inspectPageAdapter.name, inspectPageAdapter],
-  [adjustReportYesterdayAdapter.name, adjustReportYesterdayAdapter]
-]);
+registerAdapter(inspectPageAdapter);
+registerAdapter(adjustReportYesterdayAdapter);
 
 function printHelp(): void {
   console.log(`browser2cli
 
 Usage:
-  browser2cli list
-  browser2cli tabs --endpoint <url>
-  browser2cli eval --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript>
-  browser2cli capture-fetch --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--expr <javascript>] [--wait-ms <number>]
-  browser2cli run <adapter> [--key value]
-
-Examples:
-  browser2cli list
-  browser2cli tabs --endpoint http://127.0.0.1:9222
-  browser2cli eval --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => document.title)()"
-  browser2cli capture-fetch --endpoint http://127.0.0.1:9222 --url-contains adjust.com --expr "(() => window.fetch('/api'))()"
-  browser2cli run inspect-page --endpoint http://127.0.0.1:9222 --url-contains adjust.com
-  browser2cli run adjust-report-yesterday --endpoint http://127.0.0.1:9222 --url-contains adjust.com --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()"
+  browser2cli list [--json]
+  browser2cli info <adapter> [--json]
+  browser2cli tabs --endpoint <url> [--json]
+  browser2cli eval --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript> [--json]
+  browser2cli wait-target --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--timeout-ms <number>] [--json]
+  browser2cli wait-page-ready --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --ready-expr <javascript> [--timeout-ms <number>] [--json]
+  browser2cli detect-state --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--login-expr <javascript>] [--ready-expr <javascript>] [--json]
+  browser2cli capture-until --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --match-url <text> [--trigger-expr <javascript>] [--timeout-ms <number>] [--json]
+  browser2cli run <adapter> [--key value] [--json]
 `);
+}
+
+function renderAdapterInfo(adapter: Adapter): string {
+  return [
+    `${adapter.name} (${adapter.site})`,
+    adapter.description,
+    "",
+    `输入参数: ${adapter.input.join(", ")}`,
+    `输出字段: ${adapter.output.join(", ")}`,
+    `常见状态: ${adapter.states.join(", ")}`,
+    `页面前提: ${adapter.prerequisites.join("；")}`,
+    `需要登录: ${adapter.loginRequired ? "是" : "否"}`,
+    `可复用现有会话: ${adapter.reusableSession ? "是" : "否"}`
+  ].join("\n");
 }
 
 async function main(): Promise<void> {
@@ -91,62 +180,271 @@ async function main(): Promise<void> {
   }
 
   if (command === "list") {
-    const rows = Array.from(adapters.values()).map((item) => ({
-      name: item.name,
-      description: item.description
-    }));
-    console.log(JSON.stringify(rows, null, 2));
+    const entries = listAdapters();
+    if (isJsonMode(args)) {
+      console.log(JSON.stringify(okResult({
+        command: "list",
+        durationMs: 0,
+        data: entries
+      }), null, 2));
+      return;
+    }
+    const lines = entries.flatMap((item) => [
+      `${item.name} (${item.site})`,
+      `  ${item.description}`,
+      `  前提: ${item.prerequisites.join("；")}`
+    ]);
+    console.log(lines.join("\n"));
+    return;
+  }
+
+  if (command === "info") {
+    if (!adapter) {
+      throw new Browser2CliError({
+        code: "INVALID_ARGUMENT",
+        state: "invalid_argument",
+        message: "Missing adapter name. Use `browser2cli list` to see available adapters.",
+        phase: "collect",
+        nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
+      });
+    }
+    const item = getAdapter(adapter);
+    if (!item) {
+      throw new Browser2CliError({
+        code: "INVALID_ARGUMENT",
+        state: "invalid_argument",
+        message: `Unknown adapter: ${adapter}`,
+        phase: "collect",
+        nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
+      });
+    }
+    const envelope = okResult({
+      command: "info",
+      adapter: item.name,
+      durationMs: 0,
+      data: {
+        name: item.name,
+        site: item.site,
+        description: item.description,
+        input: item.input,
+        output: item.output,
+        states: item.states,
+        prerequisites: item.prerequisites,
+        loginRequired: item.loginRequired,
+        reusableSession: item.reusableSession
+      }
+    });
+    if (isJsonMode(args)) {
+      console.log(JSON.stringify(envelope, null, 2));
+      return;
+    }
+    console.log(renderAdapterInfo(item));
     return;
   }
 
   if (command === "tabs") {
-    const endpoint = requireArg(args, "endpoint");
-    console.log(JSON.stringify(await listTargets(endpoint), null, 2));
-    return;
+    const startedAt = Date.now();
+    try {
+      const endpoint = requireArg(args, "endpoint");
+      const envelope = okResult({
+        command: "tabs",
+        durationMs: Date.now() - startedAt,
+        data: await listTargets(endpoint)
+      });
+      printOutput(envelope, args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "tabs",
+        durationMs: Date.now() - startedAt,
+        phase: "locate",
+        nextSteps: ["请确认 CDP endpoint 可访问，例如 http://127.0.0.1:9222。"]
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   if (command === "eval") {
-    const target = await pickTarget(args);
-    const expr = requireArg(args, "expr");
-    console.log(JSON.stringify({
-      ok: true,
-      target,
-      result: await evaluateInTarget(target, expr)
-    }, null, 2));
-    return;
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const expr = requireArg(args, "expr");
+      const envelope = okResult({
+        command: "eval",
+        durationMs: Date.now() - startedAt,
+        phase: "collect",
+        target,
+        data: { result: await evaluateInTarget(target, expr) }
+      });
+      printOutput(envelope, args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "eval",
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
   }
 
-  if (command === "capture-fetch") {
-    const target = await pickTarget(args);
-    const captured = await captureFetchInTarget(target, {
-      triggerExpression: args.expr,
-      waitMs: args["wait-ms"] ? Number(args["wait-ms"]) : undefined
-    });
-    console.log(JSON.stringify({
-      ok: true,
-      target,
-      requests: captured
-    }, null, 2));
-    return;
+  if (command === "wait-target") {
+    const startedAt = Date.now();
+    try {
+      const endpoint = requireArg(args, "endpoint");
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      const target = await waitForTarget({
+        endpoint,
+        selector: selectorFromArgs(args),
+        timeoutMs
+      });
+      printOutput(okResult({
+        command: "wait-target",
+        durationMs: Date.now() - startedAt,
+        phase: "locate",
+        target,
+        data: target
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "wait-target",
+        durationMs: Date.now() - startedAt,
+        phase: "locate"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "wait-page-ready") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const readyExpression = requireArg(args, "ready-expr");
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      printOutput(await waitForPageReady({
+        target,
+        readyExpression,
+        timeoutMs
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "wait-page-ready",
+        durationMs: Date.now() - startedAt,
+        phase: "ensurePage"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "detect-state") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      printOutput(await detectState({
+        target,
+        loginExpression: args["login-expr"],
+        readyExpression: args["ready-expr"]
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "detect-state",
+        durationMs: Date.now() - startedAt,
+        phase: "ensureAuth"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "capture-until") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const matchUrlContains = requireArg(args, "match-url");
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      printOutput(await captureUntil({
+        target,
+        triggerExpression: args["trigger-expr"] ?? args.triggerExpr,
+        matchUrlContains,
+        timeoutMs
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "capture-until",
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   if (command === "run") {
-    if (!adapter) {
-      throw new Error("Missing adapter name. Use `browser2cli list` to see available adapters.");
+    const startedAt = Date.now();
+    try {
+      if (!adapter) {
+        throw new Browser2CliError({
+          code: "INVALID_ARGUMENT",
+          state: "invalid_argument",
+          message: "Missing adapter name. Use `browser2cli list` to see available adapters.",
+          phase: "collect",
+          nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
+        });
+      }
+      const item = getAdapter(adapter);
+      if (!item) {
+        throw new Browser2CliError({
+          code: "INVALID_ARGUMENT",
+          state: "invalid_argument",
+          message: `Unknown adapter: ${adapter}`,
+          phase: "collect",
+          nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
+        });
+      }
+      const envelope = await item.run(args);
+      if (!envelope.meta.durationMs) {
+        envelope.meta.durationMs = Date.now() - startedAt;
+      }
+      printOutput(envelope, args);
+      if (!envelope.ok) {
+        process.exitCode = 1;
+      }
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "run",
+        adapter,
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
+      }), args);
+      process.exitCode = 1;
+      return;
     }
-    const item = adapters.get(adapter);
-    if (!item) {
-      throw new Error(`Unknown adapter: ${adapter}`);
-    }
-    console.log(JSON.stringify(await item.run(args), null, 2));
-    return;
   }
 
-  throw new Error(`Unknown command: ${command}`);
+  throw new Browser2CliError({
+    code: "INVALID_ARGUMENT",
+    state: "invalid_argument",
+    message: `Unknown command: ${command}`,
+    phase: "collect",
+    nextSteps: ["请执行 browser2cli help 查看可用命令。"]
+  });
 }
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(JSON.stringify({ ok: false, error: message }, null, 2));
+  const envelope = normalizeThrownError(error, {
+    command: "main",
+    durationMs: 0,
+    phase: "collect"
+  });
+  console.error(renderEnvelope(envelope));
   process.exitCode = 1;
 });

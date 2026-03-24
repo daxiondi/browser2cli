@@ -34,10 +34,11 @@
 当前版本已经支持：
 
 - 一个轻量的 TypeScript CLI
-- 基于 CDP 的标签页连接能力
-- `tabs`、`eval`、`capture-fetch` 三个基础命令
-- adapter 的运行时结构
-- 一个内置示例 adapter：`inspect-page`
+- 基于 direct-CDP 的标签页连接能力
+- 等待、状态识别、动作 + 抓包的 runtime 原语
+- 面向 agent / 脚本的统一结果协议
+- 默认人类可读输出，以及 `--json` 原始结构输出
+- 一个带 registry 的 adapter 基础结构
 
 ## 安装
 
@@ -63,6 +64,13 @@ browser2cli tabs --endpoint http://127.0.0.1:9222
 
 ## 命令示例
 
+```bash
+npm install
+npm run build
+node dist/index.js list
+node dist/index.js info adjust-report-yesterday
+```
+
 ### 列出标签页
 
 ```bash
@@ -78,19 +86,85 @@ browser2cli eval \
   --expr "(() => ({ title: document.title, url: location.href }))()"
 ```
 
-### 捕获认证态下的 fetch / XHR
+### 等待目标页面出现
 
 ```bash
-browser2cli capture-fetch \
+browser2cli wait-target \
   --endpoint http://127.0.0.1:9222 \
   --url-contains adjust.com \
-  --expr "(() => window.fetch('/reports-service/pivot_report'))()" \
-  --wait-ms 1500
+  --timeout-ms 3000
 ```
 
-这个命令会在页面里安装一个轻量 hook，触发脚本，短暂等待，然后把捕获到的请求/响应结果以 JSON 输出。
+### 等待页面 ready
 
-## 未来 adapter 方向
+```bash
+browser2cli wait-page-ready \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --ready-expr "(() => document.readyState === 'complete')()" \
+  --timeout-ms 3000
+```
+
+### 检测页面状态
+
+```bash
+browser2cli detect-state \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --login-expr "(() => location.pathname.includes('/login'))()" \
+  --ready-expr "(() => document.readyState === 'complete')()"
+```
+
+### 触发动作并捕获匹配请求
+
+```bash
+browser2cli capture-until \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --match-url "pivot_report" \
+  --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()" \
+  --timeout-ms 3000
+```
+
+## 输出协议
+
+`browser2cli` 现在分为两层：
+
+- **内层协议层**：统一返回 JSON envelope，包含 `ok`、`code`、`state`、`data`、`error`、`meta`
+- **外层展示层**：CLI 默认渲染成人类友好文本
+
+如果你要给脚本或 agent 稳定消费，请加 `--json`：
+
+```bash
+browser2cli run inspect-page \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "adjust.com" \
+  --json
+```
+
+每次成功或失败都带：
+- 稳定的错误码和状态
+- `meta.durationMs`
+- phase 信息
+- 可选的 `hint.nextSteps`
+
+## adapter 模型
+
+每个 adapter 都应该明确：
+
+- 需要什么页面或会话前提
+- 怎么定位可复用的页面 target
+- 怎么判断登录和页面 ready
+- 怎么收集原始数据
+- 怎么规范化输出
+
+当前 adapter contract 围绕这五步：
+
+- `locate`
+- `ensureAuth`
+- `ensurePage`
+- `collect`
+- `normalize`
 
 后续适合做成固定 adapter 的能力包括：
 
@@ -117,6 +191,19 @@ browser2cli run adjust-report-yesterday \
 - 默认不回显页面存储里的原始密钥
 - 优先返回业务数据，而不是整页 HTML
 - adapter 权限要尽量窄、尽量明确
+
+## 当前状态
+
+这个仓库现在已经不只是一个“能 eval 的 CDP 小工具”，而是在往：
+
+- browser runtime
+- adapter platform
+- registry
+
+这三个方向演进。后续会继续补：
+- wait / state / action 原语
+- 更完整的 adapter
+- 更稳定的 registry 元信息
 
 ## 发布前检查
 

@@ -29,16 +29,16 @@ The practical workaround is to:
 3. read fetch/XHR responses or in-page state
 4. output normalized JSON
 
-## Initial scope
+## Current scope
 
-This initial version provides:
+This version now provides:
 
 - a lightweight TypeScript CLI
-- a CDP attachment core for existing browser tabs
-- `tabs`, `eval`, and `capture-fetch` commands
-- a runtime shape for page-context adapters
-- a sample built-in adapter for generic page metadata
-- a design document for site-specific adapters
+- a direct-CDP execution core for existing browser tabs
+- runtime primitives for waiting, state detection, and action + capture
+- a structured result envelope for agents and scripts
+- human-friendly CLI rendering by default, with `--json` for raw output
+- a registry-backed adapter model with built-in examples
 
 ## Install
 
@@ -68,20 +68,56 @@ browser2cli tabs --endpoint http://127.0.0.1:9222
 npm install
 npm run build
 node dist/index.js list
+node dist/index.js info adjust-report-yesterday
 node dist/index.js tabs --endpoint "http://127.0.0.1:9222"
 node dist/index.js eval --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => document.title)()"
-node dist/index.js capture-fetch --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => window.fetch('/api'))()"
+node dist/index.js wait-target --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com"
+node dist/index.js wait-page-ready --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --ready-expr "(() => document.readyState === 'complete')()"
+node dist/index.js detect-state --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --login-expr "(() => location.pathname.includes('/login'))()"
+node dist/index.js capture-until --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --match-url "pivot_report" --trigger-expr "(() => window.fetch('/api'))()"
 node dist/index.js run inspect-page --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com"
 ```
 
-## Planned adapter model
+## Output model
+
+`browser2cli` now uses two layers:
+
+- **Internal protocol**: every command returns a stable JSON envelope with `ok`, `code`, `state`, `data`, `error`, and `meta`
+- **External rendering**: CLI renders a concise human-readable view by default
+
+Use `--json` to get the raw envelope:
+
+```bash
+browser2cli run inspect-page \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "adjust.com" \
+  --json
+```
+
+Success and failure always carry:
+
+- stable error/state semantics
+- `meta.durationMs`
+- phase information for adapters and runtime commands
+- optional `hint.nextSteps` for recovery guidance
+
+## Adapter model
 
 Each adapter should define:
 
-- what page URL patterns it supports
-- what script to execute in the page context
-- what structured JSON it returns
-- what sensitive fields must be redacted
+- what page/session prerequisites it needs
+- how it locates a reusable page target
+- how it detects auth/page state
+- how it collects raw data
+- how it normalizes final output
+
+The current contract is shaped around these lifecycle steps:
+
+- `locate`
+- `ensureAuth`
+- `ensurePage`
+- `collect`
+- `normalize`
 
 Examples of future adapters:
 
@@ -102,7 +138,14 @@ browser2cli run adjust-report-yesterday \
 
 This adapter is intended for an already-open Adjust report page. It captures the `pivot_report` response from the page context and filters rows for the target date.
 
-## Current command model
+## Runtime primitives
+
+### List adapters
+
+```bash
+browser2cli list
+browser2cli info adjust-report-yesterday
+```
 
 ### List tabs
 
@@ -119,17 +162,45 @@ browser2cli eval \
   --expr "(() => ({ title: document.title, url: location.href }))()"
 ```
 
-### Capture authenticated fetch/XHR responses
+### Wait for a target
 
 ```bash
-browser2cli capture-fetch \
+browser2cli wait-target \
   --endpoint http://127.0.0.1:9222 \
   --url-contains adjust.com \
-  --expr "(() => window.fetch('/reports-service/pivot_report'))()" \
-  --wait-ms 1500
+  --timeout-ms 3000
 ```
 
-This command works by installing a lightweight fetch/XHR hook inside the page context, triggering a script, waiting briefly, and returning the captured request/response payloads as JSON.
+### Wait until a page is ready
+
+```bash
+browser2cli wait-page-ready \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --ready-expr "(() => document.readyState === 'complete')()" \
+  --timeout-ms 3000
+```
+
+### Detect page state
+
+```bash
+browser2cli detect-state \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --login-expr "(() => location.pathname.includes('/login'))()" \
+  --ready-expr "(() => document.readyState === 'complete')()"
+```
+
+### Trigger an action and capture the matching request
+
+```bash
+browser2cli capture-until \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --match-url "pivot_report" \
+  --trigger-expr "(() => window.fetch('/reports-service/pivot_report'))()" \
+  --timeout-ms 3000
+```
 
 ## Security stance
 
@@ -140,7 +211,14 @@ This command works by installing a lightweight fetch/XHR hook inside the page co
 
 ## Repository status
 
-This is a starter repository with a working CDP core. It establishes the CLI contract and the page-context execution model first, then adapters can be added incrementally.
+This repository now has:
+
+- a working direct-CDP core
+- runtime primitives extracted from real browser tasks
+- a structured result protocol for agents/scripts
+- a registry-backed adapter surface
+
+The next step is to keep adding runtime capabilities and adapters without tying them to any single user session or one-off script.
 
 ## Publish checklist
 
