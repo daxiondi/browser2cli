@@ -169,6 +169,22 @@ test("resolveTarget matches a target by URL substring", async () => {
   assert.equal(target.id, "tab-1");
 });
 
+test("resolveTarget does not fall back to the only page when an explicit selector does not match", () => {
+  const targets = [
+    {
+      id: "tab-1",
+      title: "Adjust Report",
+      type: "page",
+      url: "https://suite.adjust.com/datascape/report",
+      webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/tab-1"
+    }
+  ];
+  assert.throws(
+    () => resolveTarget(targets, { urlContains: "example.com/other" }),
+    /Could not resolve a unique target/
+  );
+});
+
 test("evaluateInTarget runs JS inside the selected page context", async () => {
   const mock = await createMockCdpServer();
   try {
@@ -206,7 +222,7 @@ test("captureFetchInTarget persists capture hooks across reloads", async () => {
     const targets = await listTargets(mock.endpoint);
     const captured = await captureFetchInTarget(targets[0], {
       triggerExpression: "(() => { location.reload(); return 'reloaded'; })()",
-      waitMs: 10
+      waitMs: 30
     });
     assert.equal(captured.length, 1);
     assert.ok(

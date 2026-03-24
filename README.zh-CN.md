@@ -95,6 +95,16 @@ browser2cli wait-target \
   --timeout-ms 3000
 ```
 
+### 确保页面已打开
+
+```bash
+browser2cli ensure-open \
+  --endpoint http://127.0.0.1:9222 \
+  --open-url "https://example.com/new-page" \
+  --url-contains "example.com/new-page" \
+  --timeout-ms 3000
+```
+
 ### 等待页面 ready
 
 ```bash
@@ -113,6 +123,17 @@ browser2cli detect-state \
   --url-contains adjust.com \
   --login-expr "(() => location.pathname.includes('/login'))()" \
   --ready-expr "(() => document.readyState === 'complete')()"
+```
+
+### 执行页面动作
+
+```bash
+browser2cli invoke-action \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --expr "(() => window.fetch('/reports-service/pivot_report'))()" \
+  --ready-expr "(() => document.readyState === 'complete')()" \
+  --timeout-ms 3000
 ```
 
 ### 触发动作并捕获匹配请求

@@ -72,8 +72,10 @@ node dist/index.js info adjust-report-yesterday
 node dist/index.js tabs --endpoint "http://127.0.0.1:9222"
 node dist/index.js eval --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => document.title)()"
 node dist/index.js wait-target --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com"
+node dist/index.js ensure-open --endpoint "http://127.0.0.1:9222" --open-url "https://example.com" --url-contains "example.com"
 node dist/index.js wait-page-ready --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --ready-expr "(() => document.readyState === 'complete')()"
 node dist/index.js detect-state --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --login-expr "(() => location.pathname.includes('/login'))()"
+node dist/index.js invoke-action --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --expr "(() => window.fetch('/api'))()"
 node dist/index.js capture-until --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com" --match-url "pivot_report" --trigger-expr "(() => window.fetch('/api'))()"
 node dist/index.js run inspect-page --endpoint "http://127.0.0.1:9222" --url-contains "adjust.com"
 ```
@@ -181,6 +183,16 @@ browser2cli wait-page-ready \
   --timeout-ms 3000
 ```
 
+### Ensure a page is open
+
+```bash
+browser2cli ensure-open \
+  --endpoint http://127.0.0.1:9222 \
+  --open-url "https://example.com/new-page" \
+  --url-contains "example.com/new-page" \
+  --timeout-ms 3000
+```
+
 ### Detect page state
 
 ```bash
@@ -189,6 +201,17 @@ browser2cli detect-state \
   --url-contains adjust.com \
   --login-expr "(() => location.pathname.includes('/login'))()" \
   --ready-expr "(() => document.readyState === 'complete')()"
+```
+
+### Invoke a page action
+
+```bash
+browser2cli invoke-action \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains adjust.com \
+  --expr "(() => window.fetch('/reports-service/pivot_report'))()" \
+  --ready-expr "(() => document.readyState === 'complete')()" \
+  --timeout-ms 3000
 ```
 
 ### Trigger an action and capture the matching request

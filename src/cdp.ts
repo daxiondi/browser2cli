@@ -60,8 +60,13 @@ export async function listTargets(endpoint: string): Promise<TargetInfo[]> {
   return cdpJson<TargetInfo[]>(endpoint, "/json/list");
 }
 
+export async function openTarget(endpoint: string, url: string): Promise<TargetInfo> {
+  return cdpJson<TargetInfo>(endpoint, `/json/new?${encodeURIComponent(url)}`);
+}
+
 export function resolveTarget(targets: TargetInfo[], selector: TargetSelector): TargetInfo {
   const pages = targets.filter((item) => item.type === "page");
+  const hasExplicitSelector = Boolean(selector.targetId || selector.urlContains || selector.titleContains);
 
   if (selector.targetId) {
     const direct = pages.find((item) => item.id === selector.targetId);
@@ -84,7 +89,7 @@ export function resolveTarget(targets: TargetInfo[], selector: TargetSelector): 
     }
   }
 
-  if (pages.length === 1) {
+  if (!hasExplicitSelector && pages.length === 1) {
     return pages[0];
   }
 

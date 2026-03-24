@@ -1,4 +1,4 @@
-import { evaluateInTarget, listTargets, resolveTarget, captureFetchInTarget, type CapturedRequest, type TargetInfo, type TargetSelector } from "./cdp.js";
+import { evaluateInTarget, listTargets, openTarget, resolveTarget, captureFetchInTarget, type CapturedRequest, type TargetInfo, type TargetSelector } from "./cdp.js";
 import { Browser2CliError, okResult, type ResultEnvelope } from "./protocol.js";
 
 export async function waitForTarget(params: {
@@ -172,5 +172,93 @@ export async function captureUntil(params: {
     phase: "collect",
     target: params.target,
     data: { request: match }
+  });
+}
+
+export async function ensureOpen(params: {
+  endpoint: string;
+  url: string;
+  selector: TargetSelector;
+  timeoutMs: number;
+  pollMs?: number;
+}): Promise<TargetInfo> {
+  try {
+    return await waitForTarget({
+      endpoint: params.endpoint,
+      selector: params.selector,
+      timeoutMs: params.timeoutMs,
+      pollMs: params.pollMs
+    });
+  } catch (error) {
+    if (!(error instanceof Browser2CliError) || error.code !== "TARGET_NOT_FOUND") {
+      throw error;
+    }
+  }
+
+  await openTarget(params.endpoint, params.url);
+
+  return waitForTarget({
+    endpoint: params.endpoint,
+    selector: params.selector,
+    timeoutMs: params.timeoutMs,
+    pollMs: params.pollMs
+  });
+}
+
+export async function retryOpen(params: {
+  open: () => Promise<TargetInfo>;
+  retries: number;
+  delayMs?: number;
+}): Promise<TargetInfo> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= params.retries; attempt += 1) {
+    try {
+      return await params.open();
+    } catch (error) {
+      lastError = error;
+      if (attempt === params.retries) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, params.delayMs ?? 250));
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Browser2CliError({
+    code: "ACTION_FAILED",
+    state: "action_failed",
+    message: `Open action failed after retries: ${message}`,
+    retryable: false,
+    phase: "locate",
+    details: { retries: params.retries },
+    nextSteps: ["请检查页面 URL、CDP endpoint 和浏览器状态后重试。"]
+  });
+}
+
+export async function invokeAction(params: {
+  target: TargetInfo;
+  expression: string;
+  readyExpression?: string;
+  timeoutMs?: number;
+  pollMs?: number;
+}): Promise<ResultEnvelope<{ result: unknown }>> {
+  const startedAt = Date.now();
+  const result = await evaluateInTarget(params.target, params.expression);
+
+  if (params.readyExpression) {
+    await waitForPageReady({
+      target: params.target,
+      readyExpression: params.readyExpression,
+      timeoutMs: params.timeoutMs ?? 5_000,
+      pollMs: params.pollMs
+    });
+  }
+
+  return okResult({
+    command: "invoke-action",
+    durationMs: Date.now() - startedAt,
+    phase: "collect",
+    target: params.target,
+    data: { result }
   });
 }

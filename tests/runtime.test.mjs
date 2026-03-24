@@ -10,13 +10,14 @@ const cdp = await import(new URL("./cdp.js", root));
 
 async function createRuntimeMockServer() {
   let listCallCount = 0;
+  let openedTargets = [];
   const sockets = new Set();
   const calls = [];
 
   const httpServer = createServer((req, res) => {
     if (req.url === "/json/list") {
       listCallCount += 1;
-      const targets = listCallCount < 2
+      const seededTargets = listCallCount < 2
         ? []
         : [{
             id: "tab-1",
@@ -25,8 +26,24 @@ async function createRuntimeMockServer() {
             url: "https://suite.adjust.com/datascape/report",
             webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}/devtools/page/tab-1`
           }];
+      const targets = [...seededTargets, ...openedTargets];
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(targets));
+      return;
+    }
+    if (req.url?.startsWith("/json/new?")) {
+      const rawUrl = req.url.slice("/json/new?".length);
+      const decodedUrl = decodeURIComponent(rawUrl);
+      const target = {
+        id: `tab-opened-${openedTargets.length + 1}`,
+        title: "Opened Page",
+        type: "page",
+        url: decodedUrl,
+        webSocketDebuggerUrl: `ws://127.0.0.1:${address.port}/devtools/page/tab-opened-${openedTargets.length + 1}`
+      };
+      openedTargets.push(target);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(target));
       return;
     }
     res.writeHead(404).end();
@@ -64,6 +81,8 @@ async function createRuntimeMockServer() {
         value = false;
       } else if (expression.includes("document.readyState")) {
         value = "complete";
+      } else if (expression.includes("window.__ACTION_RESULT__")) {
+        value = { ok: true, action: "done" };
       } else if (expression.includes("window.fetch('/reports-service/pivot_report')")) {
         value = "triggered";
       }
@@ -137,6 +156,78 @@ test("waitForTarget resolves a late-appearing target", async () => {
       pollMs: 10
     });
     assert.equal(result.id, "tab-1");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("ensureOpen reuses an existing matching page target", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.ensureOpen({
+      endpoint: mock.endpoint,
+      url: "https://suite.adjust.com/datascape/report",
+      selector: { urlContains: "adjust.com/datascape" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    assert.equal(target.id, "tab-1");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("ensureOpen opens a new page when no matching target exists", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.ensureOpen({
+      endpoint: mock.endpoint,
+      url: "https://example.com/new-page",
+      selector: { urlContains: "example.com/new-page" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    assert.equal(target.url, "https://example.com/new-page");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("retryOpen retries after an initial open failure", async () => {
+  let attempts = 0;
+  const target = await runtime.retryOpen({
+    open: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("temporary open failure");
+      }
+      return { id: "tab-9", title: "Retried", type: "page", url: "https://example.com", webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/tab-9" };
+    },
+    retries: 2,
+    delayMs: 1
+  });
+  assert.equal(target.id, "tab-9");
+  assert.equal(attempts, 2);
+});
+
+test("invokeAction evaluates an expression and optionally waits for ready", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.waitForTarget({
+      endpoint: mock.endpoint,
+      selector: { urlContains: "adjust.com/datascape" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    const result = await runtime.invokeAction({
+      target,
+      expression: "(() => window.__ACTION_RESULT__)()",
+      readyExpression: "(() => window.__PAGE_READY__ === true)()",
+      timeoutMs: 100,
+      pollMs: 10
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.data.result, { ok: true, action: "done" });
   } finally {
     await mock.close();
   }

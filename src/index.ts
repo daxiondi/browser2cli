@@ -6,7 +6,7 @@ import { runAdjustReportYesterday } from "./adapters/adjust-report-yesterday.js"
 import { Browser2CliError, normalizeThrownError, okResult, type ResultEnvelope } from "./protocol.js";
 import { renderEnvelope } from "./render.js";
 import { getAdapter, listAdapters, registerAdapter, type Adapter } from "./registry.js";
-import { captureUntil, detectState, waitForPageReady, waitForTarget } from "./runtime.js";
+import { captureUntil, detectState, ensureOpen, invokeAction, waitForPageReady, waitForTarget } from "./runtime.js";
 
 function isJsonMode(args: Args): boolean {
   return args.json === "true";
@@ -150,8 +150,10 @@ Usage:
   browser2cli tabs --endpoint <url> [--json]
   browser2cli eval --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript> [--json]
   browser2cli wait-target --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--timeout-ms <number>] [--json]
+  browser2cli ensure-open --endpoint <url> --open-url <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--timeout-ms <number>] [--json]
   browser2cli wait-page-ready --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --ready-expr <javascript> [--timeout-ms <number>] [--json]
   browser2cli detect-state --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--login-expr <javascript>] [--ready-expr <javascript>] [--json]
+  browser2cli invoke-action --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript> [--ready-expr <javascript>] [--timeout-ms <number>] [--json]
   browser2cli capture-until --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --match-url <text> [--trigger-expr <javascript>] [--timeout-ms <number>] [--json]
   browser2cli run <adapter> [--key value] [--json]
 `);
@@ -319,6 +321,37 @@ async function main(): Promise<void> {
     }
   }
 
+  if (command === "ensure-open") {
+    const startedAt = Date.now();
+    try {
+      const endpoint = requireArg(args, "endpoint");
+      const url = requireArg(args, "open-url");
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      const target = await ensureOpen({
+        endpoint,
+        url,
+        selector: selectorFromArgs(args),
+        timeoutMs
+      });
+      printOutput(okResult({
+        command: "ensure-open",
+        durationMs: Date.now() - startedAt,
+        phase: "locate",
+        target,
+        data: target
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "ensure-open",
+        durationMs: Date.now() - startedAt,
+        phase: "locate"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   if (command === "wait-page-ready") {
     const startedAt = Date.now();
     try {
@@ -336,6 +369,30 @@ async function main(): Promise<void> {
         command: "wait-page-ready",
         durationMs: Date.now() - startedAt,
         phase: "ensurePage"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "invoke-action") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const expression = requireArg(args, "expr");
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      printOutput(await invokeAction({
+        target,
+        expression,
+        readyExpression: args["ready-expr"],
+        timeoutMs
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "invoke-action",
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
       }), args);
       process.exitCode = 1;
       return;
