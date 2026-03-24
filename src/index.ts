@@ -2,10 +2,10 @@
 
 import { evaluateInTarget, listTargets, resolveTarget, type TargetInfo, type TargetSelector } from "./cdp.js";
 import { parseCliArgs, type Args } from "./args.js";
-import { runAdjustReportYesterday } from "./adapters/adjust-report-yesterday.js";
+import { adjustReportYesterdayAdapter } from "./adapters/adjust-report-yesterday.js";
 import { Browser2CliError, normalizeThrownError, okResult, type ResultEnvelope } from "./protocol.js";
 import { renderEnvelope } from "./render.js";
-import { getAdapter, listAdapters, registerAdapter, type Adapter } from "./registry.js";
+import { executeAdapter, getAdapter, listAdapters, registerAdapter, type AdapterArgs, type AdapterInfo, type CommandAdapter } from "./registry.js";
 import { captureUntil, detectState, ensureOpen, invokeAction, waitForPageReady, waitForTarget } from "./runtime.js";
 
 function isJsonMode(args: Args): boolean {
@@ -65,7 +65,7 @@ async function pickTarget(args: Args): Promise<TargetInfo> {
   }
 }
 
-const inspectPageAdapter: Adapter = {
+const inspectPageAdapter: CommandAdapter = {
   name: "inspect-page",
   site: "generic",
   description: "附着到页面目标并返回基础页面信息。",
@@ -103,41 +103,6 @@ const inspectPageAdapter: Adapter = {
   }
 };
 
-const adjustReportYesterdayAdapter: Adapter = {
-  name: "adjust-report-yesterday",
-  site: "adjust",
-  description: "从 Adjust 报表页抓取 pivot_report，并返回昨天或指定日期的数据行。",
-  input: ["--endpoint", "--target-id | --url-contains | --title-contains", "--date?", "--trigger-expr?"],
-  output: ["date", "rowCount", "rows", "request"],
-  states: [
-    "ok",
-    "target_not_found",
-    "multiple_targets",
-    "capture_timeout",
-    "page_not_ready",
-    "network_error",
-    "internal_error"
-  ],
-  prerequisites: ["Adjust 报表页已打开，且页面触发后会产生 pivot_report 请求。"],
-  loginRequired: true,
-  reusableSession: true,
-  async run(args) {
-    const startedAt = Date.now();
-    try {
-      const target = await pickTarget(args);
-      return await runAdjustReportYesterday(target, args);
-    } catch (error) {
-      return normalizeThrownError(error, {
-        command: "run",
-        adapter: "adjust-report-yesterday",
-        durationMs: Date.now() - startedAt,
-        phase: "collect",
-        nextSteps: ["请确认当前页面是 Adjust 报表页，并且触发动作会发出 pivot_report 请求。"]
-      });
-    }
-  }
-};
-
 registerAdapter(inspectPageAdapter);
 registerAdapter(adjustReportYesterdayAdapter);
 
@@ -159,7 +124,7 @@ Usage:
 `);
 }
 
-function renderAdapterInfo(adapter: Adapter): string {
+function renderAdapterInfo(adapter: AdapterInfo): string {
   return [
     `${adapter.name} (${adapter.site})`,
     adapter.description,
@@ -168,6 +133,7 @@ function renderAdapterInfo(adapter: Adapter): string {
     `输出字段: ${adapter.output.join(", ")}`,
     `常见状态: ${adapter.states.join(", ")}`,
     `页面前提: ${adapter.prerequisites.join("；")}`,
+    `生命周期: ${adapter.lifecycle?.join(" -> ") ?? "run"}`,
     `需要登录: ${adapter.loginRequired ? "是" : "否"}`,
     `可复用现有会话: ${adapter.reusableSession ? "是" : "否"}`
   ].join("\n");
@@ -232,6 +198,7 @@ async function main(): Promise<void> {
         output: item.output,
         states: item.states,
         prerequisites: item.prerequisites,
+        lifecycle: item.lifecycle,
         loginRequired: item.loginRequired,
         reusableSession: item.reusableSession
       }
@@ -466,7 +433,10 @@ async function main(): Promise<void> {
           nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
         });
       }
-      const envelope = await item.run(args);
+      const adapterArgs: AdapterArgs = item.name === "adjust-report-yesterday"
+        ? { ...args, __pickedTarget: await pickTarget(args) }
+        : args;
+      const envelope = await executeAdapter(item, adapterArgs);
       if (!envelope.meta.durationMs) {
         envelope.meta.durationMs = Date.now() - startedAt;
       }
