@@ -8,11 +8,24 @@ const root = new URL("../dist/", import.meta.url);
 const { listTargets, resolveTarget, evaluateInTarget, captureFetchInTarget } = await import(
   new URL("./cdp.js", root)
 );
-const { runAdjustReportYesterday } = await import(
+const { runAdjustReportYesterday, adjustReportYesterdayAdapter } = await import(
   new URL("./adapters/adjust-report-yesterday.js", root)
 );
+const { shushuProjectRowAdapter } = await import(
+  new URL("./adapters/shushu-project-row.js", root)
+);
+const { executeAdapter } = await import(
+  new URL("./registry.js", root)
+);
 
-async function createMockCdpServer() {
+async function createMockCdpServer(options = {}) {
+  const config = {
+    loginRequired: false,
+    pageReady: true,
+    reportSelected: true,
+    rowResult: { project: "Demo", installs: 99 },
+    ...options
+  };
   const httpServer = createServer((req, res) => {
     if (req.url === "/json/list") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -72,6 +85,14 @@ async function createMockCdpServer() {
 
       if (expression.includes("document.title")) {
         value = { title: "Adjust Report", url: "https://suite.adjust.com/datascape/report" };
+      } else if (expression.includes("__LOGIN_REQUIRED__")) {
+        value = config.loginRequired;
+      } else if (expression.includes("__PAGE_READY__")) {
+        value = config.pageReady;
+      } else if (expression.includes("__REPORT_SELECTED__")) {
+        value = config.reportSelected;
+      } else if (expression.includes("__ROW_RESULT__")) {
+        value = config.rowResult;
       } else if (expression.includes("__browser2cliCaptureInstalled")) {
         value = true;
       } else if (expression.includes("__browser2cliCapturedRequests")) {
@@ -250,6 +271,61 @@ test("adjust-report-yesterday adapter returns filtered rows from pivot_report", 
     assert.equal(parsed.data.date, "2026-03-22");
     assert.equal(parsed.data.rows.length, 1);
     assert.equal(parsed.data.rows[0].installs, 321);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("adjust-report-yesterday adapter returns LOGIN_REQUIRED in ensureAuth", async () => {
+  const mock = await createMockCdpServer({ loginRequired: true });
+  try {
+    const targets = await listTargets(mock.endpoint);
+    const parsed = await executeAdapter(adjustReportYesterdayAdapter, {
+      __pickedTarget: targets[0],
+      date: "2026-03-22",
+      "login-expr": "(() => window.__LOGIN_REQUIRED__ === true)()",
+      "trigger-expr": "(() => window.fetch('/reports-service/pivot_report'))()"
+    });
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.code, "LOGIN_REQUIRED");
+    assert.equal(parsed.meta.phase, "ensureAuth");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("adjust-report-yesterday adapter returns REPORT_NOT_SELECTED in ensurePage", async () => {
+  const mock = await createMockCdpServer({ reportSelected: false });
+  try {
+    const targets = await listTargets(mock.endpoint);
+    const parsed = await executeAdapter(adjustReportYesterdayAdapter, {
+      __pickedTarget: targets[0],
+      date: "2026-03-22",
+      "ready-expr": "(() => window.__PAGE_READY__ === true)()",
+      "report-selected-expr": "(() => window.__REPORT_SELECTED__ === true)()",
+      "trigger-expr": "(() => window.fetch('/reports-service/pivot_report'))()"
+    });
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.code, "REPORT_NOT_SELECTED");
+    assert.equal(parsed.meta.phase, "ensurePage");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("shushu-project-row adapter returns normalized row data", async () => {
+  const mock = await createMockCdpServer({ rowResult: { project: "Dog Dash", newUsers: 123 } });
+  try {
+    const targets = await listTargets(mock.endpoint);
+    const parsed = await executeAdapter(shushuProjectRowAdapter, {
+      __pickedTarget: targets[0],
+      "ready-expr": "(() => window.__PAGE_READY__ === true)()",
+      "row-expr": "(() => window.__ROW_RESULT__)()"
+    });
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.code, "OK");
+    assert.equal(parsed.meta.adapter, "shushu-project-row");
+    assert.deepEqual(parsed.data.row, { project: "Dog Dash", newUsers: 123 });
   } finally {
     await mock.close();
   }

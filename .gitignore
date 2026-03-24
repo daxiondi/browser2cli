@@ -2,5 +2,13 @@ node_modules
 dist
 .DS_Store
 .env
+.env.*
 *.log
 *.tgz
+evals/
+private/
+fixtures/private/
+reports/private/
+*.local.json
+*.secret*
+*.private.*

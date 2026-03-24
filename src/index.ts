@@ -3,6 +3,7 @@
 import { evaluateInTarget, listTargets, resolveTarget, type TargetInfo, type TargetSelector } from "./cdp.js";
 import { parseCliArgs, type Args } from "./args.js";
 import { adjustReportYesterdayAdapter } from "./adapters/adjust-report-yesterday.js";
+import { shushuProjectRowAdapter } from "./adapters/shushu-project-row.js";
 import { Browser2CliError, normalizeThrownError, okResult, type ResultEnvelope } from "./protocol.js";
 import { renderEnvelope } from "./render.js";
 import { executeAdapter, getAdapter, listAdapters, registerAdapter, type AdapterArgs, type AdapterInfo, type CommandAdapter } from "./registry.js";
@@ -105,6 +106,7 @@ const inspectPageAdapter: CommandAdapter = {
 
 registerAdapter(inspectPageAdapter);
 registerAdapter(adjustReportYesterdayAdapter);
+registerAdapter(shushuProjectRowAdapter);
 
 function printHelp(): void {
   console.log(`browser2cli
@@ -433,7 +435,8 @@ async function main(): Promise<void> {
           nextSteps: ["请执行 browser2cli list 查看可用 adapter。"]
         });
       }
-      const adapterArgs: AdapterArgs = item.name === "adjust-report-yesterday"
+      const needsPickedTarget = item.name === "adjust-report-yesterday" || item.name === "shushu-project-row";
+      const adapterArgs: AdapterArgs = needsPickedTarget
         ? { ...args, __pickedTarget: await pickTarget(args) }
         : args;
       const envelope = await executeAdapter(item, adapterArgs);

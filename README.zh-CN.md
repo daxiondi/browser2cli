@@ -192,6 +192,11 @@ browser2cli run inspect-page \
 - `shushu/project-row`
 - `feishu/doc-export`
 
+当前内置的 lifecycle adapter 包括：
+
+- `adjust-report-yesterday`
+- `shushu-project-row`
+
 ## 第一条业务 adapter
 
 ### Adjust：取昨天报表

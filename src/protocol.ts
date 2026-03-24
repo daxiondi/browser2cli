@@ -161,6 +161,7 @@ export function normalizeThrownError(
       state: error.state,
       message: error.message,
       retryable: error.retryable,
+      phase: error.phase ?? params.phase,
       details: error.details,
       nextSteps: error.nextSteps ?? params.nextSteps
     });

@@ -1,7 +1,8 @@
-import { captureFetchInTarget, type CapturedRequest, type TargetInfo } from "../cdp.js";
+import { captureFetchInTarget, evaluateInTarget, type CapturedRequest, type TargetInfo } from "../cdp.js";
 import type { Args } from "../args.js";
 import { Browser2CliError } from "../protocol.js";
 import type { AdapterContext, LifecycleAdapter } from "../registry.js";
+import { detectState } from "../runtime.js";
 
 function normalizeDate(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -82,10 +83,12 @@ export const adjustReportYesterdayAdapter: LifecycleAdapter = {
   output: ["date", "rowCount", "rows", "request"],
   states: [
     "ok",
+    "login_required",
     "target_not_found",
     "multiple_targets",
     "capture_timeout",
     "page_not_ready",
+    "report_not_selected",
     "network_error",
     "data_empty",
     "internal_error"
@@ -93,7 +96,7 @@ export const adjustReportYesterdayAdapter: LifecycleAdapter = {
   prerequisites: ["Adjust 报表页已打开，且页面触发后会产生 pivot_report 请求。"],
   loginRequired: true,
   reusableSession: true,
-  lifecycle: ["locate", "collect", "normalize"],
+  lifecycle: ["locate", "ensureAuth", "ensurePage", "collect", "normalize"],
   async locate(args) {
     const target = args.__pickedTarget as unknown as TargetInfo | undefined;
     if (!target) {
@@ -111,6 +114,68 @@ export const adjustReportYesterdayAdapter: LifecycleAdapter = {
       target,
       targetDate: resolveTargetDate(args as Args)
     };
+  },
+  async ensureAuth(ctx) {
+    const typedCtx = ctx as AdjustContext;
+    const loginExpression = typedCtx.args["login-expr"] as string | undefined;
+    if (!loginExpression) {
+      return typedCtx;
+    }
+    const state = await detectState({
+      target: typedCtx.target,
+      loginExpression
+    });
+    if (!state.ok) {
+      throw new Browser2CliError({
+        code: state.code,
+        state: state.state,
+        message: state.error?.message ?? "Current page requires login.",
+        retryable: state.error?.retryable ?? true,
+        phase: "ensureAuth",
+        details: state.error?.details,
+        nextSteps: state.hint?.nextSteps
+      });
+    }
+    return typedCtx;
+  },
+  async ensurePage(ctx) {
+    const typedCtx = ctx as AdjustContext;
+    const readyExpression = typedCtx.args["ready-expr"] as string | undefined;
+    const reportSelectedExpression = typedCtx.args["report-selected-expr"] as string | undefined;
+
+    if (readyExpression) {
+      const state = await detectState({
+        target: typedCtx.target,
+        readyExpression
+      });
+      if (!state.ok) {
+        throw new Browser2CliError({
+          code: state.code,
+          state: state.state,
+          message: state.error?.message ?? "Current page is not ready.",
+          retryable: state.error?.retryable ?? true,
+          phase: "ensurePage",
+          details: state.error?.details,
+          nextSteps: state.hint?.nextSteps
+        });
+      }
+    }
+
+    if (reportSelectedExpression) {
+      const reportSelected = Boolean(await evaluateInTarget(typedCtx.target, reportSelectedExpression));
+      if (!reportSelected) {
+        throw new Browser2CliError({
+          code: "REPORT_NOT_SELECTED",
+          state: "report_not_selected",
+          message: "Target report is not selected on the current page.",
+          retryable: true,
+          phase: "ensurePage",
+          nextSteps: ["请先进入目标报表页面，或调整报表选择逻辑后重试。"]
+        });
+      }
+    }
+
+    return typedCtx;
   },
   async collect(ctx) {
     const typedCtx = ctx as AdjustContext;

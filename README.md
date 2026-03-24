@@ -126,6 +126,11 @@ Examples of future adapters:
 - `shushu/project-row`
 - `feishu/doc-export`
 
+Current built-in lifecycle adapters:
+
+- `adjust-report-yesterday`
+- `shushu-project-row`
+
 ## First business adapter
 
 ### Adjust: report yesterday
@@ -231,6 +236,7 @@ browser2cli capture-until \
 - Never echo raw secrets from page storage
 - Prefer returning normalized business data over full HTML
 - Keep adapter permissions narrow and explicit
+- Keep local eval assets, secrets, and private fixtures out of the git repository
 
 ## Repository status
 
