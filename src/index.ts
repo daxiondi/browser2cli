@@ -7,7 +7,7 @@ import { shushuProjectRowAdapter } from "./adapters/shushu-project-row.js";
 import { Browser2CliError, normalizeThrownError, okResult, type ResultEnvelope } from "./protocol.js";
 import { renderEnvelope } from "./render.js";
 import { executeAdapter, getAdapter, listAdapters, registerAdapter, type AdapterArgs, type AdapterInfo, type CommandAdapter } from "./registry.js";
-import { captureUntil, detectState, ensureOpen, invokeAction, waitForPageReady, waitForTarget } from "./runtime.js";
+import { captureUntil, detectState, ensureOpen, fillForm, invokeAction, submitForm, waitForPageReady, waitForTarget, type FormFieldSpec } from "./runtime.js";
 
 function isJsonMode(args: Args): boolean {
   return args.json === "true";
@@ -42,6 +42,58 @@ function selectorFromArgs(args: Args): TargetSelector {
     urlContains: args["url-contains"],
     titleContains: args["title-contains"]
   };
+}
+
+function parseFieldsJson(args: Args): FormFieldSpec[] {
+  const raw = requireArg(args, "fields-json");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Browser2CliError({
+      code: "INVALID_ARGUMENT",
+      state: "invalid_argument",
+      message: `Invalid JSON in --fields-json: ${error instanceof Error ? error.message : String(error)}`,
+      phase: "collect",
+      details: { argument: "fields-json" },
+      nextSteps: ["请传入形如 [{\"selector\":\"...\",\"value\":\"...\"}] 的 JSON 数组。"]
+    });
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Browser2CliError({
+      code: "INVALID_ARGUMENT",
+      state: "invalid_argument",
+      message: "--fields-json must be a JSON array.",
+      phase: "collect",
+      details: { argument: "fields-json" },
+      nextSteps: ["请传入 JSON 数组，而不是对象或字符串。"]
+    });
+  }
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Browser2CliError({
+        code: "INVALID_ARGUMENT",
+        state: "invalid_argument",
+        message: `Field item at index ${index} must be an object.`,
+        phase: "collect",
+        details: { argument: "fields-json", index },
+        nextSteps: ["请传入 [{\"selector\":\"...\",\"value\":\"...\"}] 这种结构。"]
+      });
+    }
+    const selector = (item as { selector?: unknown }).selector;
+    const value = (item as { value?: unknown }).value;
+    if (typeof selector !== "string" || typeof value !== "string") {
+      throw new Browser2CliError({
+        code: "INVALID_ARGUMENT",
+        state: "invalid_argument",
+        message: `Field item at index ${index} requires string selector and value.`,
+        phase: "collect",
+        details: { argument: "fields-json", index },
+        nextSteps: ["请确保每一项都包含 selector 和 value 两个字符串字段。"]
+      });
+    }
+    return { selector, value };
+  });
 }
 
 async function pickTarget(args: Args): Promise<TargetInfo> {
@@ -119,6 +171,8 @@ Usage:
   browser2cli wait-target --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--timeout-ms <number>] [--json]
   browser2cli ensure-open --endpoint <url> --open-url <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--timeout-ms <number>] [--json]
   browser2cli wait-page-ready --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --ready-expr <javascript> [--timeout-ms <number>] [--json]
+  browser2cli fill-form --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --fields-json <json-array> [--json]
+  browser2cli submit-form --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--fields-json <json-array>] [--submit-selector <css>] [--ready-expr <javascript>] [--timeout-ms <number>] [--json]
   browser2cli detect-state --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] [--login-expr <javascript>] [--ready-expr <javascript>] [--json]
   browser2cli invoke-action --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --expr <javascript> [--ready-expr <javascript>] [--timeout-ms <number>] [--json]
   browser2cli capture-until --endpoint <url> [--target-id <id> | --url-contains <text> | --title-contains <text>] --match-url <text> [--trigger-expr <javascript>] [--timeout-ms <number>] [--json]
@@ -338,6 +392,51 @@ async function main(): Promise<void> {
         command: "wait-page-ready",
         durationMs: Date.now() - startedAt,
         phase: "ensurePage"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "fill-form") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const fields = parseFieldsJson(args);
+      printOutput(await fillForm({
+        target,
+        fields
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "fill-form",
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
+      }), args);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (command === "submit-form") {
+    const startedAt = Date.now();
+    try {
+      const target = await pickTarget(args);
+      const timeoutMs = args["timeout-ms"] ? Number(args["timeout-ms"]) : 5_000;
+      printOutput(await submitForm({
+        target,
+        fields: args["fields-json"] ? parseFieldsJson(args) : undefined,
+        submitSelector: args["submit-selector"],
+        readyExpression: args["ready-expr"],
+        timeoutMs
+      }), args);
+      return;
+    } catch (error) {
+      printOutput(normalizeThrownError(error, {
+        command: "submit-form",
+        durationMs: Date.now() - startedAt,
+        phase: "collect"
       }), args);
       process.exitCode = 1;
       return;

@@ -115,6 +115,27 @@ browser2cli wait-page-ready \
   --timeout-ms 3000
 ```
 
+### 稳定填充登录表单
+
+```bash
+browser2cli fill-form \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "example.com/login" \
+  --fields-json '[{"selector":"[data-testid=\"login-username\"]","value":"demo@example.com"},{"selector":"[data-testid=\"login-password\"]","value":"secret"}]'
+```
+
+### 填表后提交表单
+
+```bash
+browser2cli submit-form \
+  --endpoint http://127.0.0.1:9222 \
+  --url-contains "example.com/login" \
+  --fields-json '[{"selector":"[data-testid=\"login-username\"]","value":"demo@example.com"},{"selector":"[data-testid=\"login-password\"]","value":"secret"}]' \
+  --submit-selector "[data-testid='login-button']" \
+  --ready-expr "(() => !location.pathname.includes('/login'))()" \
+  --timeout-ms 5000
+```
+
 ### 检测页面状态
 
 ```bash

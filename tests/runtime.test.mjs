@@ -13,6 +13,10 @@ async function createRuntimeMockServer() {
   let openedTargets = [];
   const sockets = new Set();
   const calls = [];
+  const state = {
+    formValues: {},
+    submitCount: 0
+  };
 
   const httpServer = createServer((req, res) => {
     if (req.url === "/json/list") {
@@ -83,6 +87,25 @@ async function createRuntimeMockServer() {
         value = "complete";
       } else if (expression.includes("window.__ACTION_RESULT__")) {
         value = { ok: true, action: "done" };
+      } else if (expression.includes("__BROWSER2CLI_FILL_FORM__")) {
+        const jsonMatch = expression.match(/const spec = (\{[\s\S]*?\});/);
+        const spec = jsonMatch ? JSON.parse(jsonMatch[1]) : { fields: [] };
+        for (const field of spec.fields ?? []) {
+          state.formValues[field.selector] = field.value;
+        }
+        value = {
+          filled: (spec.fields ?? []).map((field) => field.selector),
+          missing: [],
+          values: { ...state.formValues }
+        };
+      } else if (expression.includes("__BROWSER2CLI_SUBMIT_FORM__")) {
+        state.submitCount += 1;
+        value = {
+          submitted: true,
+          missing: [],
+          submitCount: state.submitCount,
+          values: { ...state.formValues }
+        };
       } else if (expression.includes("window.fetch('/reports-service/pivot_report')")) {
         value = "triggered";
       }
@@ -137,6 +160,7 @@ async function createRuntimeMockServer() {
   return {
     endpoint: `http://127.0.0.1:${address.port}`,
     calls,
+    state,
     async close() {
       for (const socket of sockets) socket.close();
       await new Promise((resolve) => wsServer.close(resolve));
@@ -294,6 +318,63 @@ test("captureUntil returns the first matching request", async () => {
     assert.equal(result.ok, true);
     assert.equal(result.data.request.url.includes("pivot_report"), true);
     assert.equal(result.data.request.response.rows[0].installs, 222);
+  } finally {
+    await mock.close();
+  }
+});
+
+test("fillForm sets all requested values and reports selectors", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.waitForTarget({
+      endpoint: mock.endpoint,
+      selector: { urlContains: "adjust.com/datascape" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    const result = await runtime.fillForm({
+      target,
+      fields: [
+        { selector: "[data-testid='login-username']", value: "demo@example.com" },
+        { selector: "[data-testid='login-password']", value: "secret" }
+      ]
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.data.filled, [
+      "[data-testid='login-username']",
+      "[data-testid='login-password']"
+    ]);
+    assert.equal(mock.state.formValues["[data-testid='login-username']"], "demo@example.com");
+    assert.equal(mock.state.formValues["[data-testid='login-password']"], "secret");
+  } finally {
+    await mock.close();
+  }
+});
+
+test("submitForm submits after filling and waits for ready when requested", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.waitForTarget({
+      endpoint: mock.endpoint,
+      selector: { urlContains: "adjust.com/datascape" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    const result = await runtime.submitForm({
+      target,
+      fields: [
+        { selector: "[data-testid='login-username']", value: "demo@example.com" },
+        { selector: "[data-testid='login-password']", value: "secret" }
+      ],
+      submitSelector: "[data-testid='login-button']",
+      readyExpression: "(() => window.__PAGE_READY__ === true)()",
+      timeoutMs: 100,
+      pollMs: 10
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.submitted, true);
+    assert.equal(result.data.submitCount, 1);
+    assert.equal(mock.state.submitCount, 1);
   } finally {
     await mock.close();
   }
