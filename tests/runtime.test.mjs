@@ -110,7 +110,10 @@ async function createRuntimeMockServer() {
           ok: Boolean(selector),
           value: selector ? state.formValues[selector] : undefined
         };
-      } else if (expression.includes("document.querySelector(") && expression.includes("dispatchEvent(new Event('input'")) {
+      } else if (
+        expression.includes("document.querySelector(") &&
+        expression.includes("return { ok: true, value: element.value };")
+      ) {
         const selectorMatch = expression.match(/document\.querySelector\("([^"]+)"\)/);
         const selector = selectorMatch?.[1] ?? null;
         value = {

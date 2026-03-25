@@ -247,8 +247,6 @@ export async function typeTextInTarget(target: TargetInfo, selector: string, tex
       if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
         return { ok: false };
       }
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true, value: element.value };
     })()`) as { ok?: boolean; value?: string };
     return {
