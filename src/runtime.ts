@@ -318,11 +318,10 @@ function buildSubmitFormExpression(submitSelector?: string): string {
 export async function fillForm(params: {
   target: TargetInfo;
   fields: FormFieldSpec[];
-}): Promise<ResultEnvelope<{ filled: string[]; missing: string[]; values: Record<string, string> }>> {
+}): Promise<ResultEnvelope<{ filled: string[]; missing: string[]; fieldCount: number }>> {
   const startedAt = Date.now();
   const filled: string[] = [];
   const missing: string[] = [];
-  const values: Record<string, string> = {};
   for (const field of params.fields) {
     const result = await typeTextInTarget(params.target, field.selector, field.value);
     if (!result.ok) {
@@ -330,7 +329,6 @@ export async function fillForm(params: {
       continue;
     }
     filled.push(field.selector);
-    values[field.selector] = result.value ?? "";
   }
   if (missing.length > 0) {
     throw new Browser2CliError({
@@ -355,7 +353,7 @@ export async function fillForm(params: {
     data: {
       filled,
       missing,
-      values
+      fieldCount: params.fields.length
     }
   });
 }
@@ -367,16 +365,16 @@ export async function submitForm(params: {
   readyExpression?: string;
   timeoutMs?: number;
   pollMs?: number;
-}): Promise<ResultEnvelope<{ submitted: boolean; submitCount?: number; values?: Record<string, string> }>> {
+}): Promise<ResultEnvelope<{ submitted: boolean; submitCount?: number; fieldCount?: number }>> {
   const startedAt = Date.now();
 
-  let filledValues: Record<string, string> | undefined;
+  let fieldCount: number | undefined;
   if (params.fields?.length) {
     const fillResult = await fillForm({
       target: params.target,
       fields: params.fields
     });
-    filledValues = fillResult.data?.values ?? {};
+    fieldCount = fillResult.data?.fieldCount;
   }
 
   const submitResult = await evaluateInTarget(params.target, buildSubmitFormExpression(params.submitSelector)) as {
@@ -427,7 +425,7 @@ export async function submitForm(params: {
     data: {
       submitted: true,
       submitCount: submitResult.submitCount,
-      values: filledValues
+      fieldCount
     }
   });
 }

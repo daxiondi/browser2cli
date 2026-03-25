@@ -363,6 +363,7 @@ test("fillForm sets all requested values and reports selectors", async () => {
       "[data-testid='login-username']",
       "[data-testid='login-password']"
     ]);
+    assert.equal(result.data.fieldCount, 2);
     assert.equal(mock.state.formValues["[data-testid='login-username']"], "demo@example.com");
     assert.equal(mock.state.formValues["[data-testid='login-password']"], "secret");
   } finally {
@@ -393,6 +394,7 @@ test("submitForm submits after filling and waits for ready when requested", asyn
     assert.equal(result.ok, true);
     assert.equal(result.data.submitted, true);
     assert.equal(result.data.submitCount, 1);
+    assert.equal(result.data.fieldCount, 2);
     assert.equal(mock.state.submitCount, 1);
   } finally {
     await mock.close();
