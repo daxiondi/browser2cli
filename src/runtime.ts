@@ -1,4 +1,4 @@
-import { evaluateInTarget, listTargets, openTarget, resolveTarget, captureFetchInTarget, type CapturedRequest, type TargetInfo, type TargetSelector } from "./cdp.js";
+import { evaluateInTarget, listTargets, openTarget, resolveTarget, captureFetchInTarget, typeTextInTarget, type CapturedRequest, type TargetInfo, type TargetSelector } from "./cdp.js";
 import { Browser2CliError, okResult, type ResultEnvelope } from "./protocol.js";
 
 export type FormFieldSpec = {
@@ -268,47 +268,6 @@ export async function invokeAction(params: {
   });
 }
 
-function buildFillFormExpression(fields: FormFieldSpec[]): string {
-  const spec = JSON.stringify({ fields });
-  return `(() => {
-    const __BROWSER2CLI_FILL_FORM__ = true;
-    const spec = ${spec};
-    const missing = [];
-    const filled = [];
-    const values = {};
-
-    const setValue = (element, value) => {
-      const proto = element instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-      if (descriptor?.set) {
-        descriptor.set.call(element, value);
-      } else {
-        element.value = value;
-      }
-      element.setAttribute('value', value);
-      element.dispatchEvent(new Event('input', { bubbles: true }));
-      element.dispatchEvent(new Event('change', { bubbles: true }));
-      element.dispatchEvent(new Event('blur', { bubbles: true }));
-    };
-
-    for (const field of spec.fields) {
-      const element = document.querySelector(field.selector);
-      if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
-        missing.push(field.selector);
-        continue;
-      }
-      element.focus();
-      setValue(element, field.value);
-      values[field.selector] = element.value;
-      filled.push(field.selector);
-    }
-
-    return { filled, missing, values };
-  })()`;
-}
-
 function buildSubmitFormExpression(submitSelector?: string): string {
   const spec = JSON.stringify({ submitSelector: submitSelector ?? null });
   return `(() => {
@@ -361,14 +320,18 @@ export async function fillForm(params: {
   fields: FormFieldSpec[];
 }): Promise<ResultEnvelope<{ filled: string[]; missing: string[]; values: Record<string, string> }>> {
   const startedAt = Date.now();
-  const result = await evaluateInTarget(params.target, buildFillFormExpression(params.fields)) as {
-    filled?: string[];
-    missing?: string[];
-    values?: Record<string, string>;
-  } | null;
-
-  const filled = result?.filled ?? [];
-  const missing = result?.missing ?? [];
+  const filled: string[] = [];
+  const missing: string[] = [];
+  const values: Record<string, string> = {};
+  for (const field of params.fields) {
+    const result = await typeTextInTarget(params.target, field.selector, field.value);
+    if (!result.ok) {
+      missing.push(field.selector);
+      continue;
+    }
+    filled.push(field.selector);
+    values[field.selector] = result.value ?? "";
+  }
   if (missing.length > 0) {
     throw new Browser2CliError({
       code: "ACTION_FAILED",
@@ -392,7 +355,7 @@ export async function fillForm(params: {
     data: {
       filled,
       missing,
-      values: result?.values ?? {}
+      values
     }
   });
 }

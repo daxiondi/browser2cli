@@ -202,6 +202,64 @@ class CdpSession {
   }
 }
 
+type PreparedFieldResult = {
+  ok?: boolean;
+  value?: string;
+};
+
+async function prepareFieldForTyping(session: CdpSession, selector: string): Promise<PreparedFieldResult> {
+  return await session.evaluate(`(() => {
+    const selector = ${JSON.stringify(selector)};
+    const element = document.querySelector(selector);
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+      return { ok: false };
+    }
+    const proto = element instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (descriptor?.set) {
+      descriptor.set.call(element, '');
+    } else {
+      element.value = '';
+    }
+    element.focus();
+    if (typeof element.setSelectionRange === 'function') {
+      element.setSelectionRange(0, element.value.length);
+    } else if (typeof element.select === 'function') {
+      element.select();
+    }
+    window.__browser2cliFocusedSelector = selector;
+    return { ok: true, value: element.value };
+  })()`) as PreparedFieldResult;
+}
+
+export async function typeTextInTarget(target: TargetInfo, selector: string, text: string): Promise<{ ok: boolean; value?: string }> {
+  const session = await CdpSession.connect(target);
+  try {
+    const prepared = await prepareFieldForTyping(session, selector);
+    if (!prepared?.ok) {
+      return { ok: false };
+    }
+    await session.send("Input.insertText", { text });
+    const result = await session.evaluate(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+        return { ok: false };
+      }
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, value: element.value };
+    })()`) as { ok?: boolean; value?: string };
+    return {
+      ok: Boolean(result?.ok),
+      value: result?.value
+    };
+  } finally {
+    await session.close();
+  }
+}
+
 function parseResponseBody(body: NetworkBodyResult): unknown {
   const raw = body.base64Encoded && body.body ? Buffer.from(body.body, "base64").toString("utf8") : (body.body ?? "");
   if (!raw) {

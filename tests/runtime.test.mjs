@@ -15,7 +15,8 @@ async function createRuntimeMockServer() {
   const calls = [];
   const state = {
     formValues: {},
-    submitCount: 0
+    submitCount: 0,
+    focusedSelector: null
   };
 
   const httpServer = createServer((req, res) => {
@@ -77,6 +78,17 @@ async function createRuntimeMockServer() {
         return;
       }
 
+      if (msg.method === "Input.insertText") {
+        if (state.focusedSelector) {
+          state.formValues[state.focusedSelector] = msg.params?.text ?? "";
+        }
+        socket.send(JSON.stringify({
+          id: msg.id,
+          result: {}
+        }));
+        return;
+      }
+
       const expression = msg.params?.expression ?? "";
       let value = null;
       if (expression.includes("window.__PAGE_READY__")) {
@@ -87,16 +99,23 @@ async function createRuntimeMockServer() {
         value = "complete";
       } else if (expression.includes("window.__ACTION_RESULT__")) {
         value = { ok: true, action: "done" };
-      } else if (expression.includes("__BROWSER2CLI_FILL_FORM__")) {
-        const jsonMatch = expression.match(/const spec = (\{[\s\S]*?\});/);
-        const spec = jsonMatch ? JSON.parse(jsonMatch[1]) : { fields: [] };
-        for (const field of spec.fields ?? []) {
-          state.formValues[field.selector] = field.value;
+      } else if (expression.includes("window.__browser2cliFocusedSelector = selector")) {
+        const selectorMatch = expression.match(/const selector = "([^"]+)";/);
+        const selector = selectorMatch?.[1] ?? null;
+        state.focusedSelector = selector;
+        if (selector) {
+          state.formValues[selector] = "";
         }
         value = {
-          filled: (spec.fields ?? []).map((field) => field.selector),
-          missing: [],
-          values: { ...state.formValues }
+          ok: Boolean(selector),
+          value: selector ? state.formValues[selector] : undefined
+        };
+      } else if (expression.includes("document.querySelector(") && expression.includes("dispatchEvent(new Event('input'")) {
+        const selectorMatch = expression.match(/document\.querySelector\("([^"]+)"\)/);
+        const selector = selectorMatch?.[1] ?? null;
+        value = {
+          ok: Boolean(selector),
+          value: selector ? state.formValues[selector] : undefined
         };
       } else if (expression.includes("__BROWSER2CLI_SUBMIT_FORM__")) {
         state.submitCount += 1;
