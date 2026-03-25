@@ -82,6 +82,7 @@ function parseFieldsJson(args: Args): FormFieldSpec[] {
     }
     const selector = (item as { selector?: unknown }).selector;
     const value = (item as { value?: unknown }).value;
+    const transforms = (item as { transforms?: unknown }).transforms;
     if (typeof selector !== "string" || typeof value !== "string") {
       throw new Browser2CliError({
         code: "INVALID_ARGUMENT",
@@ -92,7 +93,17 @@ function parseFieldsJson(args: Args): FormFieldSpec[] {
         nextSteps: ["请确保每一项都包含 selector 和 value 两个字符串字段。"]
       });
     }
-    return { selector, value };
+    if (transforms !== undefined && (!Array.isArray(transforms) || transforms.some((entry) => typeof entry !== "string"))) {
+      throw new Browser2CliError({
+        code: "INVALID_ARGUMENT",
+        state: "invalid_argument",
+        message: `Field item at index ${index} has invalid transforms; expected string array.`,
+        phase: "collect",
+        details: { argument: "fields-json", index },
+        nextSteps: ["请把 transforms 写成字符串数组，例如 [\"strip-mailto\", \"trim\"]。"]
+      });
+    }
+    return { selector, value, transforms: transforms as string[] | undefined };
   });
 }
 

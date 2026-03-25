@@ -374,6 +374,28 @@ test("fillForm sets all requested values and reports selectors", async () => {
   }
 });
 
+test("fillForm applies configured transforms before typing", async () => {
+  const mock = await createRuntimeMockServer();
+  try {
+    const target = await runtime.waitForTarget({
+      endpoint: mock.endpoint,
+      selector: { urlContains: "adjust.com/datascape" },
+      timeoutMs: 500,
+      pollMs: 10
+    });
+    const result = await runtime.fillForm({
+      target,
+      fields: [
+        { selector: "[data-testid='login-username']", value: "mailto:demo@example.com ", transforms: ["strip-mailto", "trim"] }
+      ]
+    });
+    assert.equal(result.ok, true);
+    assert.equal(mock.state.formValues["[data-testid='login-username']"], "demo@example.com");
+  } finally {
+    await mock.close();
+  }
+});
+
 test("submitForm submits after filling and waits for ready when requested", async () => {
   const mock = await createRuntimeMockServer();
   try {

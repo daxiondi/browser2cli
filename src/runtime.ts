@@ -4,7 +4,25 @@ import { Browser2CliError, okResult, type ResultEnvelope } from "./protocol.js";
 export type FormFieldSpec = {
   selector: string;
   value: string;
+  transforms?: string[];
 };
+
+function applyFieldTransforms(value: string, transforms?: string[]): string {
+  let next = value;
+  for (const transform of transforms ?? []) {
+    switch (transform) {
+      case "trim":
+        next = next.trim();
+        break;
+      case "strip-mailto":
+        next = next.replace(/^mailto:/i, "");
+        break;
+      default:
+        break;
+    }
+  }
+  return next;
+}
 
 export async function waitForTarget(params: {
   endpoint: string;
@@ -295,6 +313,10 @@ function buildSubmitFormExpression(submitSelector?: string): string {
       form = document.querySelector('form');
     }
 
+    if (!submitTarget && form instanceof HTMLFormElement) {
+      submitTarget = form.querySelector('input[type="submit"], button[type="submit"]');
+    }
+
     if (submitTarget instanceof HTMLElement) {
       submitTarget.click();
       submitted = true;
@@ -323,7 +345,11 @@ export async function fillForm(params: {
   const filled: string[] = [];
   const missing: string[] = [];
   for (const field of params.fields) {
-    const result = await typeTextInTarget(params.target, field.selector, field.value);
+    const result = await typeTextInTarget(
+      params.target,
+      field.selector,
+      applyFieldTransforms(field.value, field.transforms)
+    );
     if (!result.ok) {
       missing.push(field.selector);
       continue;
