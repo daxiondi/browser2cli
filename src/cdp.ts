@@ -1,3 +1,5 @@
+import { Browser2CliError } from "./protocol.js";
+
 export type TargetInfo = {
   id: string;
   title: string;
@@ -30,6 +32,14 @@ type CdpResponse = {
     result?: {
       value?: unknown;
       description?: string;
+    };
+    exceptionDetails?: {
+      text?: string;
+      exception?: {
+        description?: string;
+        value?: unknown;
+      };
+      stackTrace?: unknown;
     };
   };
   error?: {
@@ -170,11 +180,37 @@ class CdpSession {
       result?: {
         value?: unknown;
       };
+      exceptionDetails?: {
+        text?: string;
+        exception?: {
+          description?: string;
+          value?: unknown;
+        };
+        stackTrace?: unknown;
+      };
     }>("Runtime.evaluate", {
       expression,
       returnByValue: true,
       awaitPromise: true
     });
+
+    if (result?.exceptionDetails) {
+      const description = result.exceptionDetails.exception?.description ?? "";
+      const text = result.exceptionDetails.text ?? "";
+      const message = (description || text || "JavaScript evaluation failed.").slice(0, 800);
+      throw new Browser2CliError({
+        code: "EVAL_ERROR",
+        state: "eval_error",
+        message,
+        retryable: false,
+        phase: "collect",
+        details: {
+          text: text ? text.slice(0, 300) : undefined,
+          description: description ? description.slice(0, 300) : undefined
+        },
+        nextSteps: ["请检查表达式是否有语法错误，或先用更小的 DOM 查询确认页面结构。"]
+      });
+    }
 
     return result?.result?.value;
   }
