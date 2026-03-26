@@ -114,6 +114,17 @@ async function pickTarget(args: Args): Promise<TargetInfo> {
     return resolveTarget(targets, selectorFromArgs(args));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Target id not found")) {
+      throw new Browser2CliError({
+        code: "TARGET_NOT_FOUND",
+        state: "target_not_found",
+        message,
+        retryable: true,
+        phase: "locate",
+        details: { selector: selectorFromArgs(args) },
+        nextSteps: ["请先确认目标 tab 仍然存在，或改用 --url-contains / --title-contains 选择目标页面。"]
+      });
+    }
     if (message.includes("Could not resolve a unique target")) {
       throw new Browser2CliError({
         code: "MULTIPLE_TARGETS",

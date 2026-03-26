@@ -206,6 +206,22 @@ test("resolveTarget does not fall back to the only page when an explicit selecto
   );
 });
 
+test("resolveTarget fails fast when an explicit target id does not exist", () => {
+  const targets = [
+    {
+      id: "tab-1",
+      title: "Adjust Report",
+      type: "page",
+      url: "https://suite.adjust.com/datascape/report",
+      webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/tab-1"
+    }
+  ];
+  assert.throws(
+    () => resolveTarget(targets, { targetId: "missing-tab" }),
+    /Target id not found/
+  );
+});
+
 test("evaluateInTarget runs JS inside the selected page context", async () => {
   const mock = await createMockCdpServer();
   try {

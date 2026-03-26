@@ -83,6 +83,8 @@ export function resolveTarget(targets: TargetInfo[], selector: TargetSelector): 
     if (direct) {
       return direct;
     }
+    // When target id is explicitly provided, do not silently fall back to other selectors.
+    throw new Error("Target id not found.");
   }
 
   if (selector.urlContains) {
